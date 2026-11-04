@@ -13,7 +13,7 @@ from app.playground.router import router as playground_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.agent = build_agent()
-    app.state.conversations = ConversationStore()
+    app.state.conversations = ConversationStore(config.max_conversations(), config.conversation_ttl_seconds())
     yield
 
 

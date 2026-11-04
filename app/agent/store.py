@@ -7,10 +7,9 @@ from weakref import WeakValueDictionary
 from langchain_core.messages import AnyMessage
 from typing_extensions import TypedDict
 
+from app.core import config
 from app.retrieval.schemas import Chunk
 
-MAX_CONVERSATIONS = 1000
-TTL_SECONDS = 3600
 MAX_MESSAGES = 6
 
 
@@ -24,8 +23,8 @@ class ConversationStore:
 
     def __init__(
         self,
-        max_conversations: int = MAX_CONVERSATIONS,
-        ttl_seconds: float = TTL_SECONDS,
+        max_conversations: int = config.DEFAULT_MAX_CONVERSATIONS,
+        ttl_seconds: float = config.DEFAULT_CONVERSATION_TTL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._max_conversations = max_conversations

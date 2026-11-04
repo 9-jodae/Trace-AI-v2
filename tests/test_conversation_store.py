@@ -7,11 +7,13 @@ import pickle
 import httpx
 import pytest
 from conftest import chunk
+from fastapi.testclient import TestClient
 from langchain_core.messages import HumanMessage
 
 import main
 from app.agent import graph
 from app.agent.store import MAX_MESSAGES, ConversationStore
+from app.core import config
 from app.core.errors import AiUnavailableError
 
 
@@ -157,4 +159,25 @@ class TestConcurrentRequests:
         asyncio.run(self.send(app, *[("q", f"t{index}") for index in range(20)]))
         gc.collect()
         assert len(app.state.conversations._locks) == 0
+
+
+class TestLimitSettings:
+    def test_defaults(self):
+        assert config.max_conversations() == 1000
+        assert config.conversation_ttl_seconds() == 3600
+
+    def test_values_reach_the_store(self, monkeypatch):
+        monkeypatch.setenv("MAX_CONVERSATIONS", "7")
+        monkeypatch.setenv("CONVERSATION_TTL_SECONDS", "30")
+        with TestClient(main.app) as test_client:
+            store = test_client.app.state.conversations
+            assert store._max_conversations == 7 and store._ttl_seconds == 30
+
+    @pytest.mark.parametrize("name", ["MAX_CONVERSATIONS", "CONVERSATION_TTL_SECONDS"])
+    @pytest.mark.parametrize("value", ["0", "-1", "abc"])
+    def test_invalid_values_fail_at_startup(self, monkeypatch, name, value):
+        monkeypatch.setenv(name, value)
+        with pytest.raises(ValueError):
+            with TestClient(main.app):
+                pass
 

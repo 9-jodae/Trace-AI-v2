@@ -7,6 +7,8 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 DEFAULT_JEV_MODEL = "jev-latest"
 DEFAULT_EMBEDDING_DIMENSIONS = 1024
+DEFAULT_MAX_CONVERSATIONS = 1000
+DEFAULT_CONVERSATION_TTL_SECONDS = 3600
 
 
 def is_production() -> bool:
@@ -75,6 +77,21 @@ def llm_model() -> str | None:
 
 def llm_fallback_model() -> str | None:
     return os.getenv("LLM_FALLBACK_MODEL") or None
+
+
+def _positive_int(name: str, default: int) -> int:
+    value = int(os.getenv(name) or default)
+    if value <= 0:
+        raise ValueError(f"{name}은 1 이상이어야 합니다.")
+    return value
+
+
+def max_conversations() -> int:
+    return _positive_int("MAX_CONVERSATIONS", DEFAULT_MAX_CONVERSATIONS)
+
+
+def conversation_ttl_seconds() -> int:
+    return _positive_int("CONVERSATION_TTL_SECONDS", DEFAULT_CONVERSATION_TTL_SECONDS)
 
 
 def database_url() -> str | None:

@@ -18,6 +18,8 @@ FAKE_ENV = {
     "LLM_MODEL": "fake:fake-llm",
     "LLM_FALLBACK_MODEL": "",
     "DATABASE_URL": "",
+    "MAX_CONVERSATIONS": "",
+    "CONVERSATION_TTL_SECONDS": "",
 }
 PROVIDER_ENV = ["TYPESAFE_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"]
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", None, ""}
