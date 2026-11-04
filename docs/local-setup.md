@@ -2,7 +2,7 @@
 
 저장소를 복제한 뒤 `git config core.hooksPath .githooks`를 실행해 pre-push 훅을 활성화합니다. 훅은 원격 브랜치 삭제와 non-fast-forward push를 거부합니다. 이미 push한 브랜치는 rebase하지 말고 `git merge`로 갱신합니다.
 
-1. Python 3.15로 가상 환경을 만들고 `pip install -r requirements-dev.txt`로 의존성을 설치합니다.
+1. Python 가상 환경을 만들고 `pip install -r requirements-dev.txt`로 의존성을 설치합니다. 이번 작업은 Python 3.13 환경에서 검증합니다.
 2. `.env.example`을 `.env`로 복사하고 값을 채웁니다. 각 항목의 설명은 `.env.example`에 있습니다.
 3. `python main.py`를 실행합니다. 서버는 8000번 포트에서 시작합니다.
 
@@ -17,11 +17,17 @@
 | 샘플 데이터 | `USE_SAMPLE_DATA=true`일 때만 사용 | 사용 불가. 설정하면 서버가 시작되지 않음 |
 | `python main.py` | `127.0.0.1`, 코드 변경 시 자동 재시작 | `0.0.0.0`, 자동 재시작 없음 |
 
-샘플 데이터를 켜지 않으면 `VECTOR_STORE`(`qdrant` 또는 `pgvector`)와 Neo4j 접속 정보가 필요합니다. 없으면 검색 경로는 503을 반환하며, 샘플로 대체하지 않습니다.
+샘플 데이터를 켜지 않으면 `VECTOR_STORE=qdrant`와 Neo4j 접속 정보가 필요합니다. 문서 중심 그래프의 근거 회수와 새 적재는 Qdrant를 사용합니다. `pgvector`는 기존 대안 코드가 남아 있으나 새 적재 경로의 지원 저장소가 아닙니다. 설정이 없으면 샘플로 대체하지 않습니다.
 
 사용자 권한 범위를 받는 계약이 아직 없어, 운영 환경에서는 저장소를 연결해도 어떤 문서도 근거로 돌려주지 않습니다. 로컬 시험에서는 `ALLOWED_GROUP_IDS`로 허용 그룹을 지정합니다.
 
-JSON 문서는 `python -m app.retrieval.indexing data/demo_documents.json`으로 적재합니다. 적재와 검색 코드는 PR #17에서 옮겼고, 파일 업로드와 파서는 아직 없습니다.
+새 내부 입력은 `python -m app.ingestion data/ingestion_document.example.json`으로 적재합니다. 분류·검증만 확인하려면 `--normalize-only --output output/normalized.json`을 붙입니다. 원문을 포함한 출력은 커밋하지 않습니다. `python -m app.retrieval.indexing data/demo_documents.json`은 기존 데모 형식용 보조 경로이며 LLM 분류를 수행하지 않습니다. 파일 업로드와 파서는 아직 없습니다.
+
+API로는 `POST /api/v1/ingestion/documents`를 사용합니다. 운영에서는 `X-Internal-Secret`이 필요하며 요청 JSON은 [입력 예시](../data/ingestion_document.example.json)를 따릅니다. 이 API는 Spring의 원본 파일 `/ingest` 요청·콜백을 구현한 것이 아닙니다.
+
+`EXTRACTION_MAX_TEXT_CHARS` 기본값은 24,000자입니다. 초과하는 원문은 일부만 분류하지 않고 검토 대기로 적재합니다. 입력 원문 전체의 상한은 200,000자이며, HTTP 적재 시간 제한은 `INGESTION_TIMEOUT_SECONDS` 기본 180초입니다. LLM 오류는 검토 대기로 처리하지만 임베딩·DB 오류는 적재 실패입니다.
+
+기존 Neo4j 데이터가 Chunk 전문 인덱스만 사용하는 경우 새 경로로 문서를 재적재해야 합니다. 새 코드는 Document 제목·본문 전문 인덱스를 만들고, 해당 문서의 레거시 Chunk 노드를 정리합니다. 검토 내용은 [문서 적재 설계](문서_적재_설계.md)와 [검색·저장소 설계](검색_저장소_설계.md)를 참고하세요.
 
 대화는 메모리에 저장하며 대화당 최근 메시지 6개와 컨텍스트만 보관합니다. 기본값은 최대 1,000개 대화, 1시간이고 `MAX_CONVERSATIONS`, `CONVERSATION_TTL_SECONDS`로 바꿀 수 있습니다. 서버를 재시작하면 사라집니다.
 

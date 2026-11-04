@@ -1,0 +1,156 @@
+{
+  "$defs": {
+    "DocumentType": {
+      "enum": [
+        "HANDOVER",
+        "APPROVAL",
+        "REPORT",
+        "PRESENTATION",
+        "ETC"
+      ],
+      "title": "DocumentType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "AI 내부 입력. 권한과 문서 식별 정보는 신뢰할 수 있는 호출자가 제공한다.",
+  "properties": {
+    "documentId": {
+      "maxLength": 300,
+      "minLength": 1,
+      "title": "Documentid",
+      "type": "string"
+    },
+    "versionId": {
+      "maxLength": 300,
+      "minLength": 1,
+      "title": "Versionid",
+      "type": "string"
+    },
+    "versionNumber": {
+      "minimum": 1,
+      "title": "Versionnumber",
+      "type": "integer"
+    },
+    "title": {
+      "maxLength": 300,
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+    },
+    "text": {
+      "maxLength": 200000,
+      "minLength": 1,
+      "title": "Text",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "유효",
+        "폐기"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "allowedGroupIds": {
+      "items": {
+        "maxLength": 300,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 1000,
+      "minItems": 1,
+      "title": "Allowedgroupids",
+      "type": "array"
+    },
+    "sourceUri": {
+      "anyOf": [
+        {
+          "maxLength": 2000,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sourceuri"
+    },
+    "author": {
+      "anyOf": [
+        {
+          "maxLength": 300,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Author"
+    },
+    "authoredAt": {
+      "anyOf": [
+        {
+          "format": "date",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Authoredat"
+    },
+    "sourceModifiedAt": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sourcemodifiedat"
+    },
+    "department": {
+      "anyOf": [
+        {
+          "maxLength": 300,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Department"
+    },
+    "documentType": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DocumentType"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "documentId",
+    "versionId",
+    "versionNumber",
+    "title",
+    "text",
+    "status",
+    "allowedGroupIds"
+  ],
+  "title": "DocumentSubmission",
+  "type": "object"
+}

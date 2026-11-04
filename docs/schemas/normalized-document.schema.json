@@ -1,0 +1,340 @@
+{
+  "$defs": {
+    "ClassificationStatus": {
+      "enum": [
+        "PENDING",
+        "CLASSIFIED",
+        "REVIEW_REQUIRED"
+      ],
+      "title": "ClassificationStatus",
+      "type": "string"
+    },
+    "DocumentType": {
+      "enum": [
+        "HANDOVER",
+        "APPROVAL",
+        "REPORT",
+        "PRESENTATION",
+        "ETC"
+      ],
+      "title": "DocumentType",
+      "type": "string"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "quote": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Quote",
+          "type": "string"
+        },
+        "charStart": {
+          "minimum": 0,
+          "title": "Charstart",
+          "type": "integer"
+        },
+        "charEnd": {
+          "exclusiveMinimum": 0,
+          "title": "Charend",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "quote",
+        "charStart",
+        "charEnd"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "GroundedTopic": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Value",
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        }
+      },
+      "required": [
+        "value",
+        "evidence"
+      ],
+      "title": "GroundedTopic",
+      "type": "object"
+    },
+    "Reference": {
+      "additionalProperties": false,
+      "properties": {
+        "targetTitle": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Targettitle",
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "targetDocumentId": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Targetdocumentid"
+        },
+        "targetVersionId": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Targetversionid"
+        },
+        "status": {
+          "default": "REVIEW_REQUIRED",
+          "enum": [
+            "VALIDATED",
+            "REVIEW_REQUIRED"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "reason": {
+          "default": "TARGET_UNRESOLVED",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "targetTitle",
+        "evidence"
+      ],
+      "title": "Reference",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "documentId": {
+      "maxLength": 300,
+      "minLength": 1,
+      "title": "Documentid",
+      "type": "string"
+    },
+    "versionId": {
+      "maxLength": 300,
+      "minLength": 1,
+      "title": "Versionid",
+      "type": "string"
+    },
+    "versionNumber": {
+      "minimum": 1,
+      "title": "Versionnumber",
+      "type": "integer"
+    },
+    "title": {
+      "maxLength": 300,
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+    },
+    "text": {
+      "maxLength": 200000,
+      "minLength": 1,
+      "title": "Text",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "유효",
+        "폐기"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "allowedGroupIds": {
+      "items": {
+        "maxLength": 300,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 1000,
+      "minItems": 1,
+      "title": "Allowedgroupids",
+      "type": "array"
+    },
+    "sourceUri": {
+      "anyOf": [
+        {
+          "maxLength": 2000,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sourceuri"
+    },
+    "author": {
+      "anyOf": [
+        {
+          "maxLength": 300,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Author"
+    },
+    "authoredAt": {
+      "anyOf": [
+        {
+          "format": "date",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Authoredat"
+    },
+    "sourceModifiedAt": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sourcemodifiedat"
+    },
+    "department": {
+      "anyOf": [
+        {
+          "maxLength": 300,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Department"
+    },
+    "documentType": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DocumentType"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "schemaVersion": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schemaversion",
+      "type": "string"
+    },
+    "contentHash": {
+      "title": "Contenthash",
+      "type": "string"
+    },
+    "classificationStatus": {
+      "$ref": "#/$defs/ClassificationStatus"
+    },
+    "classificationReason": {
+      "title": "Classificationreason",
+      "type": "string"
+    },
+    "classificationEvidence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Evidence"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "topics": {
+      "items": {
+        "$ref": "#/$defs/GroundedTopic"
+      },
+      "title": "Topics",
+      "type": "array"
+    },
+    "references": {
+      "items": {
+        "$ref": "#/$defs/Reference"
+      },
+      "title": "References",
+      "type": "array"
+    },
+    "reviewReasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reviewreasons",
+      "type": "array"
+    },
+    "fieldSources": {
+      "additionalProperties": {
+        "enum": [
+          "metadata",
+          "system",
+          "llm",
+          "unresolved"
+        ],
+        "type": "string"
+      },
+      "title": "Fieldsources",
+      "type": "object"
+    }
+  },
+  "required": [
+    "documentId",
+    "versionId",
+    "versionNumber",
+    "title",
+    "text",
+    "status",
+    "allowedGroupIds",
+    "contentHash",
+    "classificationStatus",
+    "classificationReason",
+    "fieldSources"
+  ],
+  "title": "NormalizedDocument",
+  "type": "object"
+}
