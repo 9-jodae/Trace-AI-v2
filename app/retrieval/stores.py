@@ -14,6 +14,7 @@ FROM chunks
 ORDER BY embedding <=> %s::vector
 LIMIT %s
 """
+CONNECT_TIMEOUT_SECONDS = 5
 DELETE_DOCUMENT_SQL = "DELETE FROM chunks WHERE source = %s"
 INSERT_CHUNK_SQL = "INSERT INTO chunks (id, text, source, embedding) VALUES (%s, %s, %s, %s::vector)"
 
@@ -53,13 +54,17 @@ class PostgresVectorStore:
         self._database_url = database_url
 
     async def search(self, embedding: list[float], limit: int) -> list[Chunk]:
-        async with await psycopg.AsyncConnection.connect(self._database_url, row_factory=dict_row) as connection:
+        async with await psycopg.AsyncConnection.connect(
+            self._database_url, row_factory=dict_row, connect_timeout=CONNECT_TIMEOUT_SECONDS
+        ) as connection:
             cursor = await connection.execute(VECTOR_SEARCH_SQL, (_to_vector(embedding), limit))
             return await cursor.fetchall()
 
     async def replace_document(self, source: str, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
         # 재색인 시 줄어든 청크가 남지 않도록 같은 문서의 청크를 한 트랜잭션에서 교체한다
-        async with await psycopg.AsyncConnection.connect(self._database_url) as connection:
+        async with await psycopg.AsyncConnection.connect(
+            self._database_url, connect_timeout=CONNECT_TIMEOUT_SECONDS
+        ) as connection:
             await connection.execute(DELETE_DOCUMENT_SQL, (source,))
             for chunk, embedding in zip(chunks, embeddings):
                 await connection.execute(

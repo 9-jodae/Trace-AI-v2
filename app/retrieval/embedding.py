@@ -1,7 +1,11 @@
+import asyncio
+
 from langchain.embeddings import init_embeddings
 
 from app.core import config
 from app.core.errors import AiUnavailableError
+
+TIMEOUT_SECONDS = 20.0
 
 
 def _embedder():
@@ -15,8 +19,8 @@ def _embedder():
 
 
 async def embed_query(text: str) -> list[float]:
-    return await _embedder().aembed_query(text)
+    return await asyncio.wait_for(_embedder().aembed_query(text), TIMEOUT_SECONDS)
 
 
 async def embed_documents(texts: list[str]) -> list[list[float]]:
-    return await _embedder().aembed_documents(texts)
+    return await asyncio.wait_for(_embedder().aembed_documents(texts), TIMEOUT_SECONDS)
