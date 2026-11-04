@@ -1,0 +1,8 @@
+streamlit>=1.40,<2
+neo4j>=5.25,<7
+qdrant-client>=1.12,<2
+langchain-core>=0.3,<2
+langchain-text-splitters>=0.3,<2
+langchain-ollama>=0.2,<2
+langchain-anthropic>=0.3,<2
+python-dotenv>=1,<2
