@@ -1,3 +1,4 @@
+import hashlib
 from uuid import UUID, uuid5
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -32,11 +33,15 @@ splitter = RecursiveCharacterTextSplitter(
 
 def chunk_document(document_id: str, version_id: str, text: str, source: str) -> list[Chunk]:
     chunks: list[Chunk] = []
+    content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
     for index, piece in enumerate(splitter.create_documents([text])):
         start = piece.metadata["start_index"]
         chunks.append(
             {
-                "id": str(uuid5(CHUNK_ID_NAMESPACE, f"{SETTINGS_FINGERPRINT}:{version_id}:{index}")),
+                "id": str(uuid5(
+                    CHUNK_ID_NAMESPACE,
+                    f"{document_id}:{version_id}:{content_hash}:{SETTINGS_FINGERPRINT}:{index}",
+                )),
                 "text": piece.page_content,
                 "source": source,
                 "document_id": document_id,

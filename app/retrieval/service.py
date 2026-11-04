@@ -83,13 +83,43 @@ async def search(query: str) -> SearchResult:
         logger.warning("Search skipped: no allowed groups")
         return {"chunks": [], "failed_sources": []}
 
+    embedding_lock = asyncio.Lock()
+    embedding_attempted = False
+    embedded = None
+    embedding_error = None
+
+    async def query_embedding() -> list[float]:
+        nonlocal embedding_attempted, embedded, embedding_error
+        async with embedding_lock:
+            if not embedding_attempted:
+                try:
+                    embedded = await embed_query(query)
+                except Exception as exc:
+                    embedding_error = exc
+                embedding_attempted = True
+        if embedding_error is not None:
+            raise embedding_error
+        return embedded
+
     async def search_vector() -> list[Chunk]:
-        return await vector_store.search(await embed_query(query), SOURCE_LIMIT, allowed_groups)
+        return await vector_store.search(await query_embedding(), SOURCE_LIMIT, allowed_groups)
+
+    async def search_graph() -> list[Chunk]:
+        if isinstance(graph_store, Neo4jGraphStore):
+            documents = await graph_store.search_documents(query, SOURCE_LIMIT, allowed_groups)
+            if not documents:
+                return []
+            if not isinstance(vector_store, QdrantVectorStore):
+                raise AiUnavailableError("문서 중심 그래프의 근거 회수에는 Qdrant가 필요합니다.")
+            return await vector_store.search_in_documents(
+                await query_embedding(), documents, SOURCE_LIMIT, allowed_groups
+            )
+        return await graph_store.search(query, SOURCE_LIMIT, allowed_groups)
 
     names = ["vector", "graph"]
     results = await asyncio.gather(
         search_vector(),
-        graph_store.search(query, SOURCE_LIMIT, allowed_groups),
+        search_graph(),
         return_exceptions=True,
     )
     rankings = []
@@ -102,4 +132,12 @@ async def search(query: str) -> SearchResult:
             rankings.append(result)
     if not rankings:
         raise AiUnavailableError("벡터 DB와 그래프 DB 검색이 모두 실패했습니다.")
-    return {"chunks": rrf_fuse(rankings, CONTEXT_LIMIT), "failed_sources": failed}
+    chunks = rrf_fuse(rankings, SOURCE_LIMIT * 2)
+    if isinstance(graph_store, Neo4jGraphStore):
+        # 이전 버전·철회된 권한·부분 적재 결과는 LLM에 전달하지 않는다.
+        try:
+            chunks = await graph_store.filter_current_chunks(chunks, allowed_groups)
+        except Exception as exc:
+            logger.error("Current document check failed: %s", describe_exception(exc))
+            raise AiUnavailableError("문서의 현재 버전과 접근 범위를 확인할 수 없습니다.") from exc
+    return {"chunks": chunks[:CONTEXT_LIMIT], "failed_sources": failed}

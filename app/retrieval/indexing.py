@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 
@@ -26,8 +27,10 @@ def load_documents(path: Path) -> list[DocumentInput]:
 
 
 async def index_document(document: DocumentInput) -> int:
+    content_hash = hashlib.sha256(document["text"].encode()).hexdigest()
     chunks = [
-        {**chunk, "status": document["status"], "allowed_group_ids": document["allowed_group_ids"]}
+        {**chunk, "status": document["status"], "allowed_group_ids": document["allowed_group_ids"],
+         "index_status": "READY", "content_hash": content_hash}
         for chunk in chunk_document(
             document["document_id"], document["version_id"], document["text"], document["source"]
         )
@@ -37,7 +40,9 @@ async def index_document(document: DocumentInput) -> int:
     embeddings = await embed_documents([chunk["text"] for chunk in chunks])
     vector_store, graph_store = get_real_stores()
     await vector_store.replace_version(document["version_id"], chunks, embeddings)
-    metadata = {key: value for key, value in document.items() if key != "text"}
+    # 레거시 데모 경로도 문서 노드의 전문 검색을 위해 원문을 보관한다.
+    # 실제 신규 입력의 분류·검증은 app.ingestion을 사용한다.
+    metadata = {**document, "content_hash": content_hash}
     await graph_store.replace_version(document["version_id"], document["document_id"], metadata, chunks)
     return len(chunks)
 

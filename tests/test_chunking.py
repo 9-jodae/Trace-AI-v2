@@ -31,11 +31,11 @@ def test_chunk_ids_are_uuid_and_unique():
     assert len(set(ids)) == len(ids)
 
 
-def test_chunk_ids_change_with_version_only():
+def test_chunk_ids_are_scoped_to_document_and_version():
     first = [c["id"] for c in chunk_document("doc", "v1", KOREAN_DOC, "s")]
     again = [c["id"] for c in chunk_document("다른문서", "v1", KOREAN_DOC, "다른출처")]
     other = [c["id"] for c in chunk_document("doc", "v2", KOREAN_DOC, "s")]
-    assert first == again
+    assert first != again
     assert not set(first) & set(other)
 
 
@@ -110,3 +110,9 @@ def test_fingerprint_reflects_each_setting():
     assert base != settings_fingerprint(CHUNK_SIZE, CHUNK_OVERLAP, SEPARATORS[1:])
     assert chunking.SETTINGS_FINGERPRINT == base
 
+
+
+def test_content_change_with_same_ids_does_not_overwrite_chunk_identity():
+    before = chunk_document("doc", "v1", "변경 전 본문", "문서")
+    after = chunk_document("doc", "v1", "변경 후 본문", "문서")
+    assert before[0]["id"] != after[0]["id"]

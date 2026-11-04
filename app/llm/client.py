@@ -56,17 +56,22 @@ async def _invoke(model_name: str, messages: list[BaseMessage]) -> str:
 
 
 async def generate_answer(question: str, context: list[Chunk], history: list[BaseMessage]) -> str:
+    messages = [
+        SystemMessage(content=SYSTEM_PROMPT),
+        *history,
+        HumanMessage(content=build_prompt(question, context)),
+    ]
+    return await generate_structured_response(messages)
+
+
+async def generate_structured_response(messages: list[BaseMessage]) -> str:
+    """같은 모델·재시도·안전한 오류 처리를 재사용한다. 출력 Schema는 호출자가 검증한다."""
     model_name = config.llm_model()
     if not model_name:
         raise AiUnavailableError("LLM_MODEL이 설정되지 않았습니다.")
     if not config.uses_aws_credentials(model_name) and not config.llm_api_key():
         raise AiUnavailableError("LLM_API_KEY가 설정되지 않았습니다.")
 
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        *history,
-        HumanMessage(content=build_prompt(question, context)),
-    ]
     fallback = config.llm_fallback_model()
     failure: Exception | None = None
     for candidate in (model_name, fallback) if fallback else (model_name,):

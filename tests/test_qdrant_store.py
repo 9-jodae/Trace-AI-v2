@@ -140,3 +140,39 @@ def test_reindex_removes_chunks_no_longer_present():
 
     assert texts(run(scenario)) == ["청크 1"]
 
+
+
+def test_staging_is_hidden_until_published():
+    async def scenario(store):
+        chunk = {**make_chunk(1), "index_status": "STAGING"}
+        await store.replace_version("v1", [chunk], [[1.0, 0.0]])
+        assert await store.search([1.0, 0.0], 5, ["hr"]) == []
+        await store.publish_version("doc", "v1")
+        return await store.search([1.0, 0.0], 5, ["hr"])
+
+    assert texts(run(scenario)) == ["청크 1"]
+
+
+def test_graph_candidates_keep_document_order_and_version_scope():
+    async def scenario(store):
+        await store.replace_version("v1", [make_chunk(1)], [[1.0, 0.0]])
+        other = {**make_chunk(2, "b1"), "document_id": "b"}
+        await store.replace_version("b1", [other], [[0.0, 1.0]])
+        docs = [{"document_id": "b", "version_id": "b1"}, {"document_id": "doc", "version_id": "v1"}]
+        hits = await store.search_in_documents([1.0, 0.0], docs, 5, ["hr"])
+        assert texts(hits) == ["청크 2", "청크 1"]
+        assert await store.search_in_documents([1.0, 0.0], docs, 5, ["it"]) == []
+        assert await store.search_in_documents([1.0, 0.0], [{"document_id": "b", "version_id": "old"}], 5, ["hr"]) == []
+
+    run(scenario)
+
+
+def test_retirement_is_scoped_to_document_and_version():
+    async def scenario(store):
+        await store.replace_version("v1", [make_chunk(1)], [[1.0, 0.0]])
+        other = {**make_chunk(2), "document_id": "b"}
+        await store.replace_version("v1", [other], [[1.0, 0.0]])
+        await store.retire_version("doc", "v1")
+        return await store.search([1.0, 0.0], 5, ["hr"])
+
+    assert texts(run(scenario)) == ["청크 2"]

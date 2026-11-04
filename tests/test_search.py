@@ -228,3 +228,54 @@ def test_app_shutdown_closes_stores(monkeypatch):
         assert closed == []
     assert closed == [True]
 
+
+
+@pytest.mark.parametrize("canonical_error", [False, True])
+def test_document_graph_path_recovers_chunks_and_checks_current_metadata(monkeypatch, canonical_error):
+    from app.retrieval.neo4j_store import Neo4jGraphStore
+    from app.retrieval.qdrant_store import QdrantVectorStore
+
+    events = []
+
+    class Graph(Neo4jGraphStore):
+        def __init__(self):
+            pass
+
+        async def search_documents(self, query, limit, allowed_groups):
+            events.append("documents")
+            return [{"document_id": "d", "version_id": "v"}]
+
+        async def filter_current_chunks(self, chunks, allowed_groups):
+            events.append("canonical")
+            if canonical_error:
+                raise RuntimeError("권한정보-비공개")
+            return [c for c in chunks if c["id"] != "old"]
+
+    class Vector(QdrantVectorStore):
+        def __init__(self):
+            pass
+
+        async def search(self, embedding, limit, allowed_groups):
+            return [chunk("old"), chunk("a")]
+
+        async def search_in_documents(self, embedding, documents, limit, allowed_groups):
+            assert documents == [{"document_id": "d", "version_id": "v"}]
+            events.append("document_chunks")
+            return [chunk("a")]
+
+    async def embed(query):
+        events.append("embedding")
+        await asyncio.sleep(0)
+        return [0.1, 0.2]
+
+    monkeypatch.setenv("ALLOWED_GROUP_IDS", "staff")
+    monkeypatch.setattr(service, "get_stores", lambda: (Vector(), Graph()))
+    monkeypatch.setattr(service, "embed_query", embed)
+    if canonical_error:
+        with pytest.raises(AiUnavailableError):
+            asyncio.run(service.search("질문"))
+    else:
+        result = asyncio.run(service.search("질문"))
+        assert [c["id"] for c in result["chunks"]] == ["a"]
+    assert events.count("embedding") == 1
+    assert events[-1] == "canonical"

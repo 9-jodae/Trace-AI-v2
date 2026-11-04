@@ -12,3 +12,4 @@ AGENTS.override.md
 .claude/settings.local.json
 .pytest_cache/
 .coverage
+output/

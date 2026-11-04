@@ -8,7 +8,7 @@ ROOT = Path(__file__).parent.parent
 
 class TestRoutes:
     def test_openapi_paths(self, client):
-        assert set(client.get("/openapi.json").json()["paths"]) == {"/api/v1/agent/chat"}
+        assert set(client.get("/openapi.json").json()["paths"]) == {"/api/v1/agent/chat", "/api/v1/ingestion/documents"}
 
     def test_docs(self, client):
         assert client.get("/docs").status_code == 200

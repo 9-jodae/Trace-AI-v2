@@ -134,5 +134,13 @@ def request_timeout_seconds() -> int:
     return _positive_int("REQUEST_TIMEOUT_SECONDS", DEFAULT_REQUEST_TIMEOUT_SECONDS)
 
 
+def extraction_max_text_chars() -> int:
+    return _positive_int("EXTRACTION_MAX_TEXT_CHARS", 24_000)
+
+
+def ingestion_timeout_seconds() -> int:
+    return _positive_int("INGESTION_TIMEOUT_SECONDS", 180)
+
+
 def database_url() -> str | None:
     return os.getenv("DATABASE_URL") or None

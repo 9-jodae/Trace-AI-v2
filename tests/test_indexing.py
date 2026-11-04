@@ -62,9 +62,9 @@ def test_chunks_carry_permission_fields(setup):
     assert all(c["status"] == "유효" and c["allowed_group_ids"] == ["hr"] for c in setup["vector"][0][1])
 
 
-def test_document_text_is_not_copied_to_metadata(setup):
+def test_document_text_is_available_for_document_fulltext_search(setup):
     asyncio.run(indexing.index_document(DOCUMENT))
-    assert "text" not in setup["graph"][0][2]
+    assert setup["graph"][0][2]["text"] == DOC_TEXT
 
 
 def test_blank_document_does_not_touch_stores(setup):
