@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ruff *)",
+      "Bash(pytest *)",
+      "Bash(git status *)",
+      "Bash(git branch *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git fetch *)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(**/.env)",
+      "Read(**/*.pem)",
+      "Bash(git push origin main)",
+      "Bash(git push origin dev)",
+      "Bash(git push origin HEAD:main)",
+      "Bash(git push origin HEAD:dev)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * --force*)",
+      "Bash(git push * -f*)",
+      "Bash(git push *+*)",
+      "Bash(git rebase *)"
+    ]
+  }
+}

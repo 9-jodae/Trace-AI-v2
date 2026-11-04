@@ -1,0 +1,71 @@
+import pytest
+from langchain_core.messages import HumanMessage
+
+from app.agent import graph
+from app.agent.graph import CONTEXT_REUSE_THRESHOLD, judge_context, select_route
+
+CONTEXT = [{"id": "doc-1", "text": "본문", "source": "문서"}]
+
+
+def _state(context: list) -> dict:
+    return {"messages": [HumanMessage(content="질문")], "context": context}
+
+
+def _use_probability(monkeypatch: pytest.MonkeyPatch, probability: float) -> None:
+    async def fake(*_args) -> float:
+        return probability
+
+    monkeypatch.setattr(graph.config, "jev_api_key", lambda: "test-key")
+    monkeypatch.setattr(graph, "can_answer_probability", fake)
+
+
+@pytest.mark.anyio
+async def test_no_context_goes_to_search_without_judging():
+    decision = await judge_context(_state([]))
+
+    assert decision["route"] == "SEARCH"
+    assert decision["fallback_reason"] is None
+
+
+@pytest.mark.anyio
+async def test_missing_api_key_falls_back_to_search(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(graph.config, "jev_api_key", lambda: None)
+
+    decision = await judge_context(_state(CONTEXT))
+
+    assert decision["route"] == "SEARCH"
+    assert decision["fallback_reason"] is not None
+
+
+@pytest.mark.anyio
+async def test_threshold_reuses_context(monkeypatch: pytest.MonkeyPatch):
+    _use_probability(monkeypatch, CONTEXT_REUSE_THRESHOLD)
+
+    decision = await judge_context(_state(CONTEXT))
+
+    assert decision["route"] == "CONTEXT"
+    assert select_route(decision) == "generate"
+
+
+@pytest.mark.anyio
+async def test_below_threshold_searches_again(monkeypatch: pytest.MonkeyPatch):
+    _use_probability(monkeypatch, CONTEXT_REUSE_THRESHOLD - 0.01)
+
+    decision = await judge_context(_state(CONTEXT))
+
+    assert decision["route"] == "SEARCH"
+    assert select_route(decision) == "retrieve"
+
+
+@pytest.mark.anyio
+async def test_jev_failure_falls_back_to_search(monkeypatch: pytest.MonkeyPatch):
+    async def fail(*_args) -> float:
+        raise TimeoutError
+
+    monkeypatch.setattr(graph.config, "jev_api_key", lambda: "test-key")
+    monkeypatch.setattr(graph, "can_answer_probability", fail)
+
+    decision = await judge_context(_state(CONTEXT))
+
+    assert decision["route"] == "SEARCH"
+    assert "TimeoutError" in decision["fallback_reason"]
