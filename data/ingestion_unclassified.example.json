@@ -1,0 +1,51 @@
+{
+  "candidate": {
+    "documentType": null,
+    "topics": [],
+    "references": []
+  },
+  "expectedNormalized": {
+    "documentId": "example-report",
+    "versionId": "example-report-v1",
+    "versionNumber": 1,
+    "title": "출장 결과 보고서 예시",
+    "text": "출장 결과 보고서 예시\n이 문서는 테스트용 가상 보고서입니다.\n경비 산정은 경비 처리 절차를 참조합니다.",
+    "status": "유효",
+    "allowedGroupIds": [
+      "example-staff"
+    ],
+    "sourceUri": "example://reports/report-1",
+    "author": "가상 작성자",
+    "authoredAt": "2026-11-05",
+    "sourceModifiedAt": "2026-11-05T09:00:00+09:00",
+    "department": "예시 부서",
+    "documentType": null,
+    "schemaVersion": "1.0",
+    "contentHash": "c3fe98c0591fafa26692fb294659f13a18cfc38158bff697fc19ebd8333778ac",
+    "classificationStatus": "REVIEW_REQUIRED",
+    "classificationReason": "UNCLASSIFIED",
+    "classificationEvidence": null,
+    "topics": [],
+    "references": [],
+    "reviewReasons": [
+      "UNCLASSIFIED"
+    ],
+    "fieldSources": {
+      "versionNumber": "metadata",
+      "sourceUri": "metadata",
+      "status": "metadata",
+      "title": "metadata",
+      "allowedGroupIds": "metadata",
+      "versionId": "metadata",
+      "department": "metadata",
+      "sourceModifiedAt": "metadata",
+      "documentId": "metadata",
+      "author": "metadata",
+      "authoredAt": "metadata",
+      "contentHash": "system",
+      "documentType": "unresolved",
+      "topics": "unresolved",
+      "references": "unresolved"
+    }
+  }
+}
