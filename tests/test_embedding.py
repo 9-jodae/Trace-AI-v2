@@ -168,6 +168,67 @@ class TestClientReuse:
     def test_changed_settings_create_new_embedder(self, init, monkeypatch):
         asyncio.run(embedding.embed_query("a"))
         monkeypatch.setenv("EMBEDDING_API_KEY", "other-key")
-        asyncio.run(embedding.embed_query("a"))
+        asyncio.run(embedding.embed_query("b"))
         assert len(init) == 2
+
+
+class TestQueryCache:
+    @pytest.fixture
+    def counting(self, monkeypatch):
+        calls = []
+
+        class Counting:
+            async def aembed_query(self, text):
+                calls.append(text)
+                return [float(len(calls))] + [0.0] * 1023
+
+        monkeypatch.setattr(embedding, "init_embeddings", lambda model, **kwargs: Counting())
+        return calls
+
+    def test_same_question_calls_api_once(self, counting):
+        first = asyncio.run(embedding.embed_query("질문"))
+        second = asyncio.run(embedding.embed_query("질문"))
+        assert counting == ["질문"] and first == second
+
+    def test_different_questions_are_separate(self, counting):
+        asyncio.run(embedding.embed_query("a"))
+        asyncio.run(embedding.embed_query("b"))
+        assert counting == ["a", "b"]
+
+    def test_changed_model_or_dimensions_miss_the_cache(self, counting, monkeypatch):
+        asyncio.run(embedding.embed_query("a"))
+        monkeypatch.setenv("EMBEDDING_MODEL", "openai:other")
+        asyncio.run(embedding.embed_query("a"))
+        assert len(counting) == 2
+
+    def test_cache_size_is_limited_and_evicts_oldest(self, counting, monkeypatch):
+        monkeypatch.setattr(embedding, "QUERY_CACHE_SIZE", 2)
+        for text in ("a", "b", "a", "c"):
+            asyncio.run(embedding.embed_query(text))
+        assert len(embedding._query_cache) == 2
+        asyncio.run(embedding.embed_query("a"))
+        assert counting == ["a", "b", "c"]
+        asyncio.run(embedding.embed_query("b"))
+        assert counting == ["a", "b", "c", "b"]
+
+    def test_failure_is_not_cached(self, monkeypatch):
+        attempts = []
+
+        class FailsOnce:
+            async def aembed_query(self, text):
+                attempts.append(text)
+                if len(attempts) == 1:
+                    raise RuntimeError("x")
+                return [0.1] * 1024
+
+        monkeypatch.setattr(embedding, "init_embeddings", lambda model, **kwargs: FailsOnce())
+        with pytest.raises(RuntimeError):
+            asyncio.run(embedding.embed_query("q"))
+        assert asyncio.run(embedding.embed_query("q")) == [0.1] * 1024
+
+    def test_wrong_dimensions_are_not_cached(self, init, monkeypatch):
+        monkeypatch.setattr(FakeEmbedder, "size", 2)
+        with pytest.raises(AiUnavailableError):
+            asyncio.run(embedding.embed_query("q"))
+        assert not embedding._query_cache
 

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections import OrderedDict
 from functools import lru_cache
 
 from langchain.embeddings import init_embeddings
@@ -12,6 +13,9 @@ logger = logging.getLogger(__name__)
 TIMEOUT_SECONDS = 20.0
 BATCH_SIZE = 64
 BATCH_ATTEMPTS = 2
+QUERY_CACHE_SIZE = 256
+
+_query_cache: OrderedDict[tuple[str | None, int, str], list[float]] = OrderedDict()
 
 
 @lru_cache(maxsize=1)
@@ -39,8 +43,17 @@ def _check_dimensions(vectors: list[list[float]]) -> None:
 
 
 async def embed_query(text: str) -> list[float]:
+    # 같은 질문의 임베딩 비용을 줄인다. 벡터에는 권한 정보가 없어 대화끼리 공유해도 된다
+    key = (config.embedding_model(), config.embedding_dimensions(), text)
+    cached = _query_cache.get(key)
+    if cached is not None:
+        _query_cache.move_to_end(key)
+        return cached
     vector = await asyncio.wait_for(_embedder().aembed_query(text), TIMEOUT_SECONDS)
     _check_dimensions([vector])
+    _query_cache[key] = vector
+    if len(_query_cache) > QUERY_CACHE_SIZE:
+        _query_cache.popitem(last=False)
     return vector
 
 
