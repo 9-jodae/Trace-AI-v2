@@ -96,7 +96,6 @@ class TestProjectFiles:
             "langchain-text-splitters",
             "psycopg",
             "neo4j",
-            "qdrant-client",
             "langchain-aws",
             "typesafe-sdk",
             "python-dotenv",

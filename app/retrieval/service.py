@@ -9,7 +9,6 @@ from app.core.errors import AiUnavailableError, describe_exception
 from app.retrieval.embedding import embed_query
 from app.retrieval.fusion import rrf_fuse
 from app.retrieval.neo4j_store import Neo4jGraphStore
-from app.retrieval.qdrant_store import QdrantVectorStore
 from app.retrieval.schemas import Chunk
 from app.retrieval.stores import (
     GraphStore,
@@ -36,27 +35,15 @@ def _sample_stores() -> tuple[VectorStore, GraphStore]:
 
 
 @cache
-def _real_stores(
-    kind: str, database_url: str | None, qdrant_url: str | None, collection: str, neo4j_settings: tuple
-) -> tuple[VectorStore, GraphStore]:
-    if kind == "qdrant":
-        vector_store = QdrantVectorStore.from_url(qdrant_url, collection)
-    else:
-        vector_store = PostgresVectorStore(database_url)
-    return vector_store, Neo4jGraphStore.from_uri(*neo4j_settings)
+def _real_stores(database_url: str, neo4j_settings: tuple) -> tuple[VectorStore, GraphStore]:
+    return PostgresVectorStore(database_url), Neo4jGraphStore.from_uri(*neo4j_settings)
 
 
 def get_real_stores() -> tuple[VectorStore, GraphStore]:
-    kind = config.vector_store()
-    settings_by_kind = {"qdrant": config.qdrant_url(), "pgvector": config.database_url()}
-    # 벡터 저장소는 비교 후 결정하므로 기본값을 두지 않는다
-    if not settings_by_kind.get(kind) or not config.neo4j_uri() or not config.neo4j_password():
+    if not config.database_url() or not config.neo4j_uri() or not config.neo4j_password():
         raise AiUnavailableError("운영 저장소 설정이 없습니다.")
     return _real_stores(
-        kind,
         config.database_url(),
-        config.qdrant_url(),
-        config.qdrant_collection(),
         (config.neo4j_uri(), config.neo4j_user(), config.neo4j_password(), config.neo4j_database()),
     )
 

@@ -42,18 +42,6 @@ def allowed_group_ids() -> list[str]:
     return [group.strip() for group in os.getenv("ALLOWED_GROUP_IDS", "").split(",") if group.strip()]
 
 
-def vector_store() -> str | None:
-    return os.getenv("VECTOR_STORE") or None
-
-
-def qdrant_url() -> str | None:
-    return os.getenv("QDRANT_URL") or None
-
-
-def qdrant_collection() -> str:
-    return os.getenv("QDRANT_COLLECTION") or "internal_chunks"
-
-
 def neo4j_uri() -> str | None:
     return os.getenv("NEO4J_URI") or None
 

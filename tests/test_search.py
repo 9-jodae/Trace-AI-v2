@@ -143,34 +143,21 @@ class TestRealStoreSelection:
         monkeypatch.setenv("NEO4J_URI", "bolt://localhost:7687")
         monkeypatch.setenv("NEO4J_PASSWORD", "fake-password")
 
-    def test_qdrant_selected(self, monkeypatch, neo4j):
-        monkeypatch.setenv("VECTOR_STORE", "qdrant")
-        monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
-        vector, graph = service.get_stores()
-        assert type(vector).__name__ == "QdrantVectorStore" and type(graph).__name__ == "Neo4jGraphStore"
-
-    def test_pgvector_selected(self, monkeypatch, neo4j):
-        monkeypatch.setenv("VECTOR_STORE", "pgvector")
+    def test_real_stores_selected(self, monkeypatch, neo4j):
         monkeypatch.setenv("DATABASE_URL", "postgresql://db")
-        assert type(service.get_stores()[0]).__name__ == "PostgresVectorStore"
+        vector, graph = service.get_stores()
+        assert type(vector).__name__ == "PostgresVectorStore" and type(graph).__name__ == "Neo4jGraphStore"
 
     def test_stores_are_reused(self, monkeypatch, neo4j):
-        monkeypatch.setenv("VECTOR_STORE", "qdrant")
-        monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
+        monkeypatch.setenv("DATABASE_URL", "postgresql://db")
         assert service.get_stores()[0] is service.get_stores()[0]
 
-    @pytest.mark.parametrize(
-        "kind, url_name",
-        [("", "QDRANT_URL"), ("unknown", "QDRANT_URL"), ("qdrant", "NONE"), ("pgvector", "NONE")],
-    )
-    def test_undecided_or_incomplete_vector_store_fails(self, monkeypatch, neo4j, kind, url_name):
-        monkeypatch.setenv("VECTOR_STORE", kind)
+    def test_missing_database_url_fails(self, neo4j):
         with pytest.raises(AiUnavailableError):
             service.get_stores()
 
     def test_missing_neo4j_fails(self, monkeypatch):
-        monkeypatch.setenv("VECTOR_STORE", "qdrant")
-        monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
+        monkeypatch.setenv("DATABASE_URL", "postgresql://db")
         with pytest.raises(AiUnavailableError):
             service.get_stores()
 
@@ -184,9 +171,8 @@ class TestRealStoreSelection:
             async def close(self):
                 closed.append(self.name)
 
-        monkeypatch.setenv("VECTOR_STORE", "qdrant")
-        monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
-        monkeypatch.setattr(service.QdrantVectorStore, "from_url", lambda url, collection: Closable("vector"))
+        monkeypatch.setenv("DATABASE_URL", "postgresql://db")
+        monkeypatch.setattr(service, "PostgresVectorStore", lambda url: Closable("vector"))
         monkeypatch.setattr(service.Neo4jGraphStore, "from_uri", lambda *args: Closable("graph"))
         service.get_stores()
         asyncio.run(service.close_stores())
