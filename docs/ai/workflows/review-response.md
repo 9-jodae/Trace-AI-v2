@@ -24,5 +24,5 @@
      }
    }
    ```
-5. For stacked PRs, if a preceding branch changes, run `git merge origin/<preceding-branch>` on each later branch. If it diverges after an earlier PR merges, run `git merge origin/develop`. Stop if a conflict requires judgment. Verify, then use a normal push. Before merging, check passing CI, no actionable findings, no human `CHANGES_REQUESTED`, `mergeable` without conflicts, and base `develop`. Merge in order with `gh pr merge {n} --merge`; never use `--admin`, squash, rebase merge, or delete the remote branch. Recheck later PRs after each merge.
+5. For stacked PRs, if a preceding branch changes, run `git merge origin/<preceding-branch>` on each later branch. If it diverges after an earlier PR merges, run `git merge origin/dev`. Stop if a conflict requires judgment. Verify, then use a normal push. Before merging, check passing CI, no actionable findings, no human `CHANGES_REQUESTED`, `mergeable` without conflicts, and base `dev`. Merge in order with `gh pr merge {n} --merge`; never use `--admin`, squash, rebase merge, or delete the remote branch. Recheck later PRs after each merge.
 6. Report received findings, applied/disagreed/deferred counts, fix SHAs, Issue numbers, CI outcomes, and merge SHAs in Korean. For a review-only PR, do not merge it.

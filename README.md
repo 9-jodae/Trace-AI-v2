@@ -1,6 +1,8 @@
-# docs199 AI 서버
+# docs199-AI
 
-사내 문서 검색 서비스의 Python AI 서버입니다. FastAPI와 LangGraph로 검색과 답변 생성을 처리합니다.
+근거를 제시하는 사내 문서 검색 도우미의 AI 기획과 개발을 관리하는 레포입니다.
+
+Python AI 서버는 FastAPI와 LangGraph로 검색과 답변 생성을 처리합니다.
 
 ## 로컬 실행
 
