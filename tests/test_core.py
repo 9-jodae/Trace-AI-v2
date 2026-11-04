@@ -43,6 +43,30 @@ class TestConfig:
             config.embedding_dimensions()
 
 
+class TestServerOptions:
+    @pytest.fixture(autouse=True)
+    def clean(self, monkeypatch):
+        monkeypatch.delenv("HOST", raising=False)
+        monkeypatch.delenv("PORT", raising=False)
+
+    def test_local_binds_loopback_with_reload(self):
+        assert config.server_options() == {"host": "127.0.0.1", "port": 8000, "reload": True}
+
+    def test_production_has_no_reload(self, monkeypatch):
+        monkeypatch.setenv("APP_ENV", "production")
+        assert config.server_options() == {"host": "0.0.0.0", "port": 8000, "reload": False}
+
+    def test_missing_app_env_has_no_reload(self, monkeypatch):
+        monkeypatch.delenv("APP_ENV")
+        assert config.server_options()["reload"] is False
+
+    def test_host_and_port_can_be_set(self, monkeypatch):
+        monkeypatch.setenv("HOST", "10.0.0.1")
+        monkeypatch.setenv("PORT", "9000")
+        options = config.server_options()
+        assert options["host"] == "10.0.0.1" and options["port"] == 9000
+
+
 class TestCamelModel:
     class Sample(CamelModel):
         thread_id: str

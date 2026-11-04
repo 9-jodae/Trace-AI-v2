@@ -14,6 +14,16 @@ def is_production() -> bool:
     return os.getenv("APP_ENV") != "local"
 
 
+def server_options() -> dict:
+    # 로컬은 내 PC에서만 접속하게 하고, 운영은 Compose 네트워크의 Spring이 접속할 수 있게 연다
+    default_host = "0.0.0.0" if is_production() else "127.0.0.1"
+    return {
+        "host": os.getenv("HOST") or default_host,
+        "port": int(os.getenv("PORT") or 8000),
+        "reload": not is_production(),
+    }
+
+
 def internal_secret() -> str | None:
     return os.getenv("INTERNAL_SECRET") or None
 
