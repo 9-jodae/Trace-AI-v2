@@ -67,6 +67,7 @@ def counter(monkeypatch):
     monkeypatch.setattr(llm_client, "init_chat_model", lambda model, **kwargs: FakeChatModel(calls))
     monkeypatch.setattr(jev_client, "AsyncTypeSafeClient", FakeJevClient)
     monkeypatch.setenv("USE_SAMPLE_DATA", "true")
+    monkeypatch.setenv("EMBEDDING_DIMENSIONS", "2")
     service._sample_stores.cache_clear()
     return calls
 
@@ -133,3 +134,10 @@ def test_database_connection_failure_only_disables_vector_search(client, counter
     monkeypatch.setattr(service, "get_stores", lambda: (stores.PostgresVectorStore("db"), stores.SampleGraphStore()))
     body = post(client, "결제 서비스").json()
     assert body["failedSources"] == ["vector"] and body["sources"]
+
+
+def test_wrong_embedding_dimensions_only_disable_vector_search(client, counter, monkeypatch):
+    monkeypatch.setenv("EMBEDDING_DIMENSIONS", "1024")
+    body = post(client, "결제 서비스").json()
+    assert body["failedSources"] == ["vector"] and body["sources"]
+

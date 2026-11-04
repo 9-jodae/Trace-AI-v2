@@ -7,11 +7,13 @@ from app.retrieval import embedding
 
 
 class FakeEmbedder:
+    size = 1024
+
     async def aembed_query(self, text):
-        return [0.1, 0.2]
+        return [0.1] * self.size
 
     async def aembed_documents(self, texts):
-        return [[0.1, 0.2] for _ in texts]
+        return [[0.1] * self.size for _ in texts]
 
 
 @pytest.fixture
@@ -32,7 +34,7 @@ def test_passes_model_key_and_dimensions(init):
 
 
 def test_embed_query(init):
-    assert asyncio.run(embedding.embed_query("질문")) == [0.1, 0.2]
+    assert asyncio.run(embedding.embed_query("질문")) == [0.1] * 1024
 
 
 def test_embed_documents_keeps_count(init):
@@ -63,3 +65,25 @@ def test_bedrock_uses_aws_credentials_and_model_kwargs(monkeypatch, init):
     monkeypatch.setenv("EMBEDDING_API_KEY", "")
     asyncio.run(embedding.embed_query("질문"))
     assert init == [("bedrock:amazon.titan-embed-text-v2:0", {"model_kwargs": {"dimensions": 1024}})]
+
+
+def test_query_with_wrong_dimensions_is_rejected(init, monkeypatch):
+    monkeypatch.setattr(FakeEmbedder, "size", 2)
+    with pytest.raises(AiUnavailableError, match="1024"):
+        asyncio.run(embedding.embed_query("질문"))
+
+
+def test_documents_with_wrong_dimensions_are_rejected(init, monkeypatch):
+    monkeypatch.setattr(FakeEmbedder, "size", 2)
+    with pytest.raises(AiUnavailableError, match="1024"):
+        asyncio.run(embedding.embed_documents(["a", "b"]))
+
+
+def test_one_wrong_vector_rejects_the_batch(monkeypatch):
+    class Mixed:
+        async def aembed_documents(self, texts):
+            return [[0.1] * 1024, [0.1]]
+
+    monkeypatch.setattr(embedding, "init_embeddings", lambda model, **kwargs: Mixed())
+    with pytest.raises(AiUnavailableError):
+        asyncio.run(embedding.embed_documents(["a", "b"]))
