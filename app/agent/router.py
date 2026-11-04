@@ -12,10 +12,13 @@ router = APIRouter(prefix="/api/v1/agent", tags=["agent"], dependencies=[Depends
 @router.post("/chat")
 async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     thread_id = body.thread_id or str(uuid4())
+    conversations = request.app.state.conversations
+    saved = conversations.get(thread_id)
     result = await request.app.state.agent.ainvoke(
-        {"messages": [HumanMessage(content=body.message)]},
-        config={"configurable": {"thread_id": thread_id}},
+        {"messages": [*saved["messages"], HumanMessage(content=body.message)], "context": saved["context"]},
     )
+    # 실패한 요청은 여기까지 오지 않으므로 대화 기록과 컨텍스트에 남지 않는다
+    conversations.save(thread_id, result["messages"], result["context"])
     return ChatResponse(
         thread_id=thread_id,
         answer=result["messages"][-1].text,

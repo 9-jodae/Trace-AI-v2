@@ -2,7 +2,6 @@ import logging
 from typing import Annotated, Literal
 
 from langchain_core.messages import AIMessage, AnyMessage
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
@@ -77,5 +76,4 @@ def build_agent():
     graph.add_conditional_edges("judge_context", select_route, ["generate", "retrieve"])
     graph.add_edge("retrieve", "generate")
     graph.add_edge("generate", END)
-    # InMemorySaver는 프로세스 재시작 시 대화가 사라지므로 운영에서는 영속 저장소로 교체
-    return graph.compile(checkpointer=InMemorySaver())
+    return graph.compile()

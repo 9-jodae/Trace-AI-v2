@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
+from app.agent import graph
 from app.core import config
 from app.core.errors import AiUnavailableError
 from app.retrieval import service
@@ -99,3 +100,6 @@ class TestSampleDataNeverReachesProduction:
     def test_local_without_opt_in_returns_503(self, client):
         response = client.post(URL, json={"message": "재택근무 규정 알려줘"})
         assert response.status_code == 503
+
+    def test_graph_has_no_checkpointer(self):
+        assert graph.build_agent().checkpointer is None

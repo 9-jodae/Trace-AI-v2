@@ -97,7 +97,6 @@ class TestSearchFailures:
         ai.probability = 0.9
         assert [s["id"] for s in ask("q3").json()["sources"]] == ["a", "b"]
 
-    @pytest.mark.xfail(strict=True, reason="결함 7: 503으로 실패한 질문이 대화 기록에 남음")
     def test_failed_turn_is_not_left_in_history(self, ask, ai):
         ai.search_result = AiUnavailableError("x")
         assert ask("실패한 질문").status_code == 503

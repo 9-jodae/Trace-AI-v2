@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from app.agent.graph import build_agent
 from app.agent.router import router as agent_router
+from app.agent.store import ConversationStore
 from app.core import config
 from app.core.errors import register_error_handlers
 from app.playground.router import router as playground_router
@@ -12,6 +13,7 @@ from app.playground.router import router as playground_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.agent = build_agent()
+    app.state.conversations = ConversationStore()
     yield
 
 
