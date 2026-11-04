@@ -41,7 +41,7 @@ class FakeJevClient:
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, *args):
+    async def aclose(self):
         pass
 
     async def system_one(self, state, questions):
@@ -140,4 +140,3 @@ def test_wrong_embedding_dimensions_only_disable_vector_search(client, counter, 
     monkeypatch.setenv("EMBEDDING_DIMENSIONS", "1024")
     body = post(client, "결제 서비스").json()
     assert body["failedSources"] == ["vector"] and body["sources"]
-

@@ -155,3 +155,19 @@ class TestDocumentBatches:
             asyncio.run(embedding.embed_documents(["a"]))
         assert len(calls) == 1
 
+
+class TestClientReuse:
+    def test_embedder_is_created_once(self, init):
+        async def scenario():
+            await embedding.embed_query("a")
+            await embedding.embed_documents(["b"])
+
+        asyncio.run(scenario())
+        assert len(init) == 1
+
+    def test_changed_settings_create_new_embedder(self, init, monkeypatch):
+        asyncio.run(embedding.embed_query("a"))
+        monkeypatch.setenv("EMBEDDING_API_KEY", "other-key")
+        asyncio.run(embedding.embed_query("a"))
+        assert len(init) == 2
+

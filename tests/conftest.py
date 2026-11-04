@@ -32,6 +32,11 @@ def forbid_real_clients(monkeypatch):
     monkeypatch.setattr(jev_client, "AsyncTypeSafeClient", _forbidden)
     monkeypatch.setattr(llm_client, "init_chat_model", _forbidden)
     monkeypatch.setattr(embedding, "init_embeddings", _forbidden)
+    # 재사용하는 클라이언트가 테스트 사이에 남지 않게 한다
+    embedding._build_embedder.cache_clear()
+    llm_client._build_model.cache_clear()
+    monkeypatch.setattr(jev_client, "_client", None)
+    monkeypatch.setattr(jev_client, "_client_settings", None)
 
 
 def pytest_sessionfinish(session):

@@ -206,3 +206,30 @@ class TestFallbackModel:
             run()
         assert models["calls"] == ["fake:fake-llm"]
 
+
+class TestClientReuse:
+    def test_model_is_created_once(self, model):
+        run()
+        run()
+        assert len(model.init_calls) == 1
+
+    def test_changed_key_creates_new_model(self, model, monkeypatch):
+        run()
+        monkeypatch.setenv("LLM_API_KEY", "other-key")
+        run()
+        assert len(model.init_calls) == 2
+
+    def test_primary_and_fallback_are_both_kept(self, monkeypatch):
+        calls = []
+        models = {"fake:fake-llm": FakeModel(error=RuntimeError("x")), "fake:backup": FakeModel("대체")}
+
+        def factory(name, **kwargs):
+            calls.append(name)
+            return models[name]
+
+        monkeypatch.setenv("LLM_FALLBACK_MODEL", "fake:backup")
+        monkeypatch.setattr(llm, "init_chat_model", factory)
+        run()
+        run()
+        assert calls == ["fake:fake-llm", "fake:backup"]
+

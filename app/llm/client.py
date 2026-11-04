@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from functools import lru_cache
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -39,10 +40,15 @@ def build_prompt(question: str, context: list[Chunk]) -> str:
     return f"<context>\n{chunks}\n</context>\n\n질문: {question}"
 
 
-async def _invoke(model_name: str, messages: list[BaseMessage]) -> str:
+@lru_cache(maxsize=2)
+def _build_model(model_name: str, api_key: str | None):
     # Bedrock은 API 키 대신 실행 환경의 AWS 자격 증명을 쓴다
-    credentials = {} if config.uses_aws_credentials(model_name) else {"api_key": config.llm_api_key()}
-    model = init_chat_model(model_name, max_retries=MAX_RETRIES, **credentials)
+    credentials = {} if config.uses_aws_credentials(model_name) else {"api_key": api_key}
+    return init_chat_model(model_name, max_retries=MAX_RETRIES, **credentials)
+
+
+async def _invoke(model_name: str, messages: list[BaseMessage]) -> str:
+    model = _build_model(model_name, config.llm_api_key())
     response = await asyncio.wait_for(model.ainvoke(messages), TIMEOUT_SECONDS)
     if not response.text.strip():
         raise EmptyResponseError

@@ -8,6 +8,7 @@ from app.agent.router import router as agent_router
 from app.agent.store import ConversationStore
 from app.core import config
 from app.core.errors import register_error_handlers
+from app.jev.client import close_client as close_jev_client
 from app.playground.router import router as playground_router
 
 
@@ -16,6 +17,7 @@ async def lifespan(app: FastAPI):
     app.state.agent = build_agent()
     app.state.conversations = ConversationStore(config.max_conversations(), config.conversation_ttl_seconds())
     yield
+    await close_jev_client()
 
 
 def configure_logging() -> None:

@@ -2,7 +2,9 @@ import asyncio
 
 import pytest
 from conftest import chunk
+from fastapi.testclient import TestClient
 
+import main
 from app.jev import client as jev
 
 
@@ -23,6 +25,9 @@ class FakeJev:
         return self
 
     async def __aexit__(self, *args):
+        self.closed = True
+
+    async def aclose(self):
         self.closed = True
 
     async def system_one(self, state, questions):
@@ -94,9 +99,62 @@ class TestCanAnswerProbability:
         assert list(fake.questions) == ["can_answer"]
         assert fake.questions["can_answer"] is jev.CAN_ANSWER
 
-    def test_error_propagates_and_client_closes(self, monkeypatch):
+    def test_error_propagates_and_keeps_client_usable(self, monkeypatch):
         fake = FakeJev(error=RuntimeError("x"))
         monkeypatch.setattr(jev, "AsyncTypeSafeClient", fake)
-        with pytest.raises(RuntimeError):
-            asyncio.run(jev.can_answer_probability("q", [chunk("a")], []))
-        assert fake.closed
+
+        async def scenario():
+            with pytest.raises(RuntimeError):
+                await jev.can_answer_probability("q", [chunk("a")], [])
+            fake.error = None
+            return await jev.can_answer_probability("q", [chunk("a")], [])
+
+        assert asyncio.run(scenario()) == fake.probability
+        assert not fake.closed
+
+
+class TestClientReuse:
+    def test_client_is_created_once(self, monkeypatch):
+        created = []
+
+        def factory(**kwargs):
+            client = FakeJev()
+            created.append(client)
+            return client
+
+        monkeypatch.setattr(jev, "AsyncTypeSafeClient", factory)
+
+        async def scenario():
+            for _ in range(5):
+                await jev.can_answer_probability("q", [chunk("a")], [])
+
+        asyncio.run(scenario())
+        assert len(created) == 1
+
+    def test_changed_settings_replace_and_close_client(self, monkeypatch):
+        created = []
+
+        def factory(**kwargs):
+            client = FakeJev()
+            created.append(client)
+            return client
+
+        monkeypatch.setattr(jev, "AsyncTypeSafeClient", factory)
+
+        async def scenario():
+            await jev.can_answer_probability("q", [chunk("a")], [])
+            monkeypatch.setenv("JEV_MODEL", "other")
+            await jev.can_answer_probability("q", [chunk("a")], [])
+
+        asyncio.run(scenario())
+        assert len(created) == 2 and created[0].closed and not created[1].closed
+
+    def test_close_client_is_safe_without_client(self):
+        asyncio.run(jev.close_client())
+
+    def test_app_shutdown_closes_client(self, monkeypatch):
+        fake = FakeJev()
+        with TestClient(main.create_app()):
+            monkeypatch.setattr(jev, "_client", fake)
+            monkeypatch.setattr(jev, "_client_settings", (None, "m"))
+        assert fake.closed and jev._client is None
