@@ -1,5 +1,6 @@
 import logging
-from typing import Annotated, Literal
+import time
+from typing import Annotated, Awaitable, Callable, Literal
 
 from langchain_core.messages import AIMessage, AnyMessage
 from langgraph.graph import END, START, StateGraph
@@ -68,11 +69,23 @@ async def generate(state: AgentState) -> dict:
     return {"messages": [AIMessage(content=answer)]}
 
 
+def _timed(name: str, step: Callable[[AgentState], Awaitable[dict]]) -> Callable[[AgentState], Awaitable[dict]]:
+    async def run(state: AgentState) -> dict:
+        started = time.perf_counter()
+        try:
+            return await step(state)
+        finally:
+            # 질문과 문서 본문은 남기지 않는다
+            logger.info("Step finished: step=%s elapsed_ms=%.0f", name, (time.perf_counter() - started) * 1000)
+
+    return run
+
+
 def build_agent():
     graph = StateGraph(AgentState)
-    graph.add_node("judge_context", judge_context)
-    graph.add_node("retrieve", retrieve)
-    graph.add_node("generate", generate)
+    graph.add_node("judge_context", _timed("judge_context", lambda state: judge_context(state)))
+    graph.add_node("retrieve", _timed("retrieve", lambda state: retrieve(state)))
+    graph.add_node("generate", _timed("generate", lambda state: generate(state)))
     graph.add_edge(START, "judge_context")
     graph.add_conditional_edges("judge_context", select_route, ["generate", "retrieve"])
     graph.add_edge("retrieve", "generate")

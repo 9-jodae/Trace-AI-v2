@@ -155,6 +155,7 @@ class TestPostgresVectorStore:
         assert params == ("[0.5,1.0]", 3)
         assert connect.url == "postgresql://db"
         assert connect.kwargs["connect_timeout"] == stores.CONNECT_TIMEOUT_SECONDS
+        assert connect.kwargs["options"] == f"-c statement_timeout={stores.SEARCH_STATEMENT_TIMEOUT_MS}"
 
     def test_search_never_writes(self, connect):
         connection = FakeConnection()
@@ -179,6 +180,7 @@ class TestPostgresVectorStore:
             ("b", "B", "s", "doc", "ver", 0, 1, "[0.2]"),
         ]
         assert connection.exit_error is None
+        assert connect.kwargs["options"] == f"-c statement_timeout={stores.WRITE_STATEMENT_TIMEOUT_MS}"
 
     def test_replace_failure_reaches_transaction_exit(self, connect):
         connection = FakeConnection(fail_on="INSERT")

@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -17,8 +18,19 @@ async def lifespan(app: FastAPI):
     yield
 
 
+def configure_logging() -> None:
+    # uvicorn은 앱 로거를 설정하지 않으므로 단계별 시간 로그가 보이도록 app 로거만 켠다
+    logger = logging.getLogger("app")
+    logger.setLevel(logging.INFO)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s:     %(name)s: %(message)s"))
+        logger.addHandler(handler)
+
+
 def create_app() -> FastAPI:
     config.validate_startup()
+    configure_logging()
     production = config.is_production()
     app = FastAPI(
         title="9-jodae Agent API",

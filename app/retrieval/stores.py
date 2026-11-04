@@ -16,6 +16,8 @@ ORDER BY embedding <=> %s::vector
 LIMIT %s
 """
 CONNECT_TIMEOUT_SECONDS = 5
+SEARCH_STATEMENT_TIMEOUT_MS = 5_000
+WRITE_STATEMENT_TIMEOUT_MS = 60_000
 DELETE_VERSION_SQL = "DELETE FROM chunks WHERE version_id = %s"
 INSERT_CHUNK_SQL = """
 INSERT INTO chunks (id, text, source, document_id, version_id, char_start, char_end, embedding)
@@ -59,7 +61,10 @@ class PostgresVectorStore:
 
     async def search(self, embedding: list[float], limit: int) -> list[Chunk]:
         async with await psycopg.AsyncConnection.connect(
-            self._database_url, row_factory=dict_row, connect_timeout=CONNECT_TIMEOUT_SECONDS
+            self._database_url,
+            row_factory=dict_row,
+            connect_timeout=CONNECT_TIMEOUT_SECONDS,
+            options=f"-c statement_timeout={SEARCH_STATEMENT_TIMEOUT_MS}",
         ) as connection:
             cursor = await connection.execute(VECTOR_SEARCH_SQL, (_to_vector(embedding), limit))
             return await cursor.fetchall()
@@ -68,7 +73,9 @@ class PostgresVectorStore:
         # 재색인 시 줄어든 청크가 남지 않도록 같은 버전의 청크를 한 트랜잭션에서 교체한다
         pairs = list(zip(chunks, embeddings, strict=True))
         async with await psycopg.AsyncConnection.connect(
-            self._database_url, connect_timeout=CONNECT_TIMEOUT_SECONDS
+            self._database_url,
+            connect_timeout=CONNECT_TIMEOUT_SECONDS,
+            options=f"-c statement_timeout={WRITE_STATEMENT_TIMEOUT_MS}",
         ) as connection:
             await connection.execute(DELETE_VERSION_SQL, (version_id,))
             async with connection.cursor() as cursor:

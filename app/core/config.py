@@ -9,6 +9,7 @@ DEFAULT_JEV_MODEL = "jev-latest"
 DEFAULT_EMBEDDING_DIMENSIONS = 1024
 DEFAULT_MAX_CONVERSATIONS = 1000
 DEFAULT_CONVERSATION_TTL_SECONDS = 3600
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
 
 
 def is_production() -> bool:
@@ -92,6 +93,10 @@ def max_conversations() -> int:
 
 def conversation_ttl_seconds() -> int:
     return _positive_int("CONVERSATION_TTL_SECONDS", DEFAULT_CONVERSATION_TTL_SECONDS)
+
+
+def request_timeout_seconds() -> int:
+    return _positive_int("REQUEST_TIMEOUT_SECONDS", DEFAULT_REQUEST_TIMEOUT_SECONDS)
 
 
 def database_url() -> str | None:
