@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 TIMEOUT_SECONDS = 30.0
 MAX_RETRIES = 1
 
+
+class EmptyResponseError(Exception):
+    """LLM이 빈 답변을 돌려준 경우. 다음 모델로 넘어가기 위해 호출 실패와 같게 다룬다."""
+
+
 CONTEXT_TAG_PATTERN = re.compile(r"<\s*/?\s*context\b[^>]*>?", re.IGNORECASE)
 
 SYSTEM_PROMPT = """사내 문서 검색 결과를 바탕으로 질문에 답한다.
@@ -34,25 +39,34 @@ def build_prompt(question: str, context: list[Chunk]) -> str:
     return f"<context>\n{chunks}\n</context>\n\n질문: {question}"
 
 
+async def _invoke(model_name: str, messages: list[BaseMessage]) -> str:
+    # Bedrock은 API 키 대신 실행 환경의 AWS 자격 증명을 쓴다
+    credentials = {} if config.uses_aws_credentials(model_name) else {"api_key": config.llm_api_key()}
+    model = init_chat_model(model_name, max_retries=MAX_RETRIES, **credentials)
+    response = await asyncio.wait_for(model.ainvoke(messages), TIMEOUT_SECONDS)
+    if not response.text.strip():
+        raise EmptyResponseError
+    return response.text
+
+
 async def generate_answer(question: str, context: list[Chunk], history: list[BaseMessage]) -> str:
     model_name = config.llm_model()
     if not model_name:
         raise AiUnavailableError("LLM_MODEL이 설정되지 않았습니다.")
-    # Bedrock은 API 키 대신 실행 환경의 AWS 자격 증명을 쓴다
-    credentials = {} if config.uses_aws_credentials(model_name) else {"api_key": config.llm_api_key()}
-    if credentials and not config.llm_api_key():
+    if not config.uses_aws_credentials(model_name) and not config.llm_api_key():
         raise AiUnavailableError("LLM_API_KEY가 설정되지 않았습니다.")
-    try:
-        model = init_chat_model(model_name, max_retries=MAX_RETRIES, **credentials)
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
-            *history,
-            HumanMessage(content=build_prompt(question, context)),
-        ]
-        response = await asyncio.wait_for(model.ainvoke(messages), TIMEOUT_SECONDS)
-    except Exception as exc:
-        logger.error("LLM call failed: %s", describe_exception(exc))
-        raise AiUnavailableError(f"LLM 호출 실패 ({type(exc).__name__})") from exc
-    if not response.text.strip():
-        raise AiUnavailableError("LLM이 빈 응답을 반환했습니다.")
-    return response.text
+
+    messages = [
+        SystemMessage(content=SYSTEM_PROMPT),
+        *history,
+        HumanMessage(content=build_prompt(question, context)),
+    ]
+    fallback = config.llm_fallback_model()
+    failure: Exception | None = None
+    for candidate in (model_name, fallback) if fallback else (model_name,):
+        try:
+            return await _invoke(candidate, messages)
+        except Exception as exc:
+            logger.error("LLM call failed: %s: %s", candidate, describe_exception(exc))
+            failure = exc
+    raise AiUnavailableError(f"LLM 호출 실패 ({type(failure).__name__})") from failure

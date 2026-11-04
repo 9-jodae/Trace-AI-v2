@@ -73,5 +73,9 @@ def llm_model() -> str | None:
     return os.getenv("LLM_MODEL") or None
 
 
+def llm_fallback_model() -> str | None:
+    return os.getenv("LLM_FALLBACK_MODEL") or None
+
+
 def database_url() -> str | None:
     return os.getenv("DATABASE_URL") or None

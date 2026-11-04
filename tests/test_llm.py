@@ -148,3 +148,61 @@ class TestGenerateAnswer:
         monkeypatch.setenv("LLM_API_KEY", "")
         assert run() == "답변"
         assert model.init_calls == [("bedrock_converse:some-model", {"max_retries": llm.MAX_RETRIES})]
+
+
+class TestFallbackModel:
+    @pytest.fixture
+    def models(self, monkeypatch):
+        monkeypatch.setenv("LLM_FALLBACK_MODEL", "fake:backup")
+        behaviors = {"fake:fake-llm": FakeModel("주 모델 답변"), "fake:backup": FakeModel("대체 모델 답변")}
+        calls = []
+
+        def factory(name, **kwargs):
+            calls.append(name)
+            return behaviors[name]
+
+        monkeypatch.setattr(llm, "init_chat_model", factory)
+        behaviors["calls"] = calls
+        return behaviors
+
+    def test_primary_success_does_not_call_fallback(self, models):
+        assert run() == "주 모델 답변"
+        assert models["calls"] == ["fake:fake-llm"]
+
+    def test_failure_switches_to_fallback(self, models):
+        models["fake:fake-llm"].error = RuntimeError("503")
+        assert run() == "대체 모델 답변"
+        assert models["calls"] == ["fake:fake-llm", "fake:backup"]
+
+    def test_empty_response_switches_to_fallback(self, models):
+        models["fake:fake-llm"].content = ""
+        assert run() == "대체 모델 답변"
+
+    def test_timeout_switches_to_fallback(self, models, monkeypatch):
+        async def hang(messages):
+            await asyncio.sleep(10)
+
+        models["fake:fake-llm"].ainvoke = hang
+        monkeypatch.setattr(llm, "TIMEOUT_SECONDS", 0.01)
+        assert run() == "대체 모델 답변"
+
+    def test_both_failing_is_unavailable(self, models):
+        models["fake:fake-llm"].error = RuntimeError("비밀")
+        models["fake:backup"].error = ValueError("비밀")
+        with pytest.raises(AiUnavailableError) as error:
+            run()
+        assert "ValueError" in str(error.value) and "비밀" not in str(error.value)
+        assert models["calls"] == ["fake:fake-llm", "fake:backup"]
+
+    def test_fallback_receives_same_messages(self, models):
+        models["fake:fake-llm"].error = RuntimeError("503")
+        run()
+        assert "청크 내용" in models["fake:backup"].messages[-1].content
+
+    def test_no_fallback_setting_keeps_single_attempt(self, models, monkeypatch):
+        monkeypatch.setenv("LLM_FALLBACK_MODEL", "")
+        models["fake:fake-llm"].error = RuntimeError("503")
+        with pytest.raises(AiUnavailableError):
+            run()
+        assert models["calls"] == ["fake:fake-llm"]
+
