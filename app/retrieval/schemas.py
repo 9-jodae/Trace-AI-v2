@@ -1,7 +1,11 @@
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 
 class Chunk(TypedDict):
     id: str
     text: str
-    source: str
+    source: str | None
+    document_id: NotRequired[str | None]
+    version_id: NotRequired[str | None]
+    char_start: NotRequired[int | None]
+    char_end: NotRequired[int | None]

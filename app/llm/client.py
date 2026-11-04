@@ -25,10 +25,15 @@ def build_prompt(question: str, context: list[Chunk]) -> str:
 
 
 async def generate_answer(question: str, context: list[Chunk], history: list[BaseMessage]) -> str:
-    if not config.llm_api_key() or not config.llm_model():
-        raise AiUnavailableError("LLM_API_KEY 또는 LLM_MODEL이 설정되지 않았습니다.")
+    model_name = config.llm_model()
+    if not model_name:
+        raise AiUnavailableError("LLM_MODEL이 설정되지 않았습니다.")
+    # Bedrock은 API 키 대신 실행 환경의 AWS 자격 증명을 쓴다
+    credentials = {} if config.uses_aws_credentials(model_name) else {"api_key": config.llm_api_key()}
+    if credentials and not config.llm_api_key():
+        raise AiUnavailableError("LLM_API_KEY가 설정되지 않았습니다.")
     try:
-        model = init_chat_model(config.llm_model(), api_key=config.llm_api_key(), max_retries=MAX_RETRIES)
+        model = init_chat_model(model_name, max_retries=MAX_RETRIES, **credentials)
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),
             *history,
@@ -38,4 +43,6 @@ async def generate_answer(question: str, context: list[Chunk], history: list[Bas
     except Exception as exc:
         logger.exception("LLM call failed")
         raise AiUnavailableError(f"LLM 호출 실패 ({type(exc).__name__})") from exc
+    if not response.text.strip():
+        raise AiUnavailableError("LLM이 빈 응답을 반환했습니다.")
     return response.text

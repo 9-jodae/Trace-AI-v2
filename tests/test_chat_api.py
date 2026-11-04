@@ -1,5 +1,7 @@
 import pytest
 
+from app.agent.schemas import MAX_MESSAGE_LENGTH
+
 URL = "/api/v1/agent/chat"
 RESPONSE_FIELDS = {
     "threadId",
@@ -17,7 +19,15 @@ def test_response_fields_are_camel_case(ask):
 
 
 def test_source_fields(ask):
-    assert set(ask("q").json()["sources"][0]) == {"id", "text", "source"}
+    assert set(ask("q").json()["sources"][0]) == {
+        "id",
+        "text",
+        "source",
+        "documentId",
+        "versionId",
+        "charStart",
+        "charEnd",
+    }
 
 
 def test_thread_id_is_returned(ask):
@@ -47,16 +57,14 @@ def test_invalid_payload(client, ai, payload):
     assert ai.search_calls == []
 
 
-@pytest.mark.xfail(strict=True, reason="결함 5: 공백뿐인 질문도 검색과 LLM까지 실행됨")
 @pytest.mark.parametrize("message", ["   ", "\n\t"])
 def test_blank_message_does_not_spend_api(client, ai, message):
     assert client.post(URL, json={"message": message}).status_code == 422
     assert ai.search_calls == []
 
 
-@pytest.mark.xfail(strict=True, reason="결함 6: 질문 길이 제한이 없어 비용이 무제한으로 늘 수 있음")
 def test_oversized_message_is_rejected(client, ai):
-    assert client.post(URL, json={"message": "가" * 1_000_000}).status_code == 422
+    assert client.post(URL, json={"message": "가" * (MAX_MESSAGE_LENGTH + 1)}).status_code == 422
     assert ai.search_calls == []
 
 
@@ -81,7 +89,35 @@ def test_special_characters_round_trip(ask):
     assert ask(question).json()["answer"] == f"답변: {question}"
 
 
-@pytest.mark.xfail(strict=True, reason="결함 4: source가 NULL이면 LLM 비용을 쓴 뒤 500 발생")
 def test_null_source_from_database_does_not_crash(ask, ai):
     ai.search_result = {"chunks": [{"id": "a", "text": "내용", "source": None}], "failed_sources": []}
     assert ask("q").status_code == 200
+
+
+def test_max_length_message_is_accepted(client, ai):
+    assert client.post(URL, json={"message": "가" * MAX_MESSAGE_LENGTH}).status_code == 200
+
+
+def test_surrounding_whitespace_is_trimmed(ask, ai):
+    ask("  질문  ")
+    assert ai.search_calls == ["질문"]
+
+
+def test_contract_fields_reach_response(ask, ai):
+    full = {
+        "id": "u",
+        "text": "t",
+        "source": "s",
+        "document_id": "d",
+        "version_id": "v",
+        "char_start": 3,
+        "char_end": 9,
+    }
+    ai.search_result = {"chunks": [full], "failed_sources": []}
+    source = ask("q").json()["sources"][0]
+    assert source["documentId"] == "d" and source["versionId"] == "v"
+    assert source["charStart"] == 3 and source["charEnd"] == 9
+
+
+def test_oversized_thread_id_is_rejected(client, ai):
+    assert client.post(URL, json={"message": "q", "threadId": "x" * 129}).status_code == 422

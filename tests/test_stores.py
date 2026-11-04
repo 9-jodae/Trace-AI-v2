@@ -21,8 +21,8 @@ class TestCosine:
     def test_zero_vector_does_not_crash(self):
         assert stores._cosine([0.0, 0.0], [1.0, 0.0]) == 0.0
 
-    def test_1536_dimensions(self):
-        vector = [0.5] * 1536
+    def test_high_dimensions(self):
+        vector = [0.5] * 1024
         assert stores._cosine(vector, vector) == pytest.approx(1.0)
 
 
@@ -69,6 +69,18 @@ class TestSampleGraphStore:
 
     def test_limit(self):
         assert len(asyncio.run(stores.SampleGraphStore().search("재택근무 규정", 1))) == 1
+
+
+FULL_A = {
+    "id": "a",
+    "text": "A",
+    "source": "s",
+    "document_id": "doc",
+    "version_id": "ver",
+    "char_start": 0,
+    "char_end": 1,
+}
+FULL_B = {**FULL_A, "id": "b", "text": "B"}
 
 
 class FakeCursor:
@@ -133,24 +145,26 @@ class TestPostgresVectorStore:
     def test_values_are_parameterized(self):
         assert "%s" in stores.VECTOR_SEARCH_SQL and "{" not in stores.VECTOR_SEARCH_SQL
 
-    def test_replace_deletes_then_inserts(self, connect):
+    def test_replace_deletes_version_then_inserts(self, connect):
         connection = FakeConnection()
         connect(connection)
-        asyncio.run(stores.PostgresVectorStore("x").replace_document("s", [chunk("a"), chunk("b")], [[0.1], [0.2]]))
+        asyncio.run(stores.PostgresVectorStore("x").replace_version("ver", [FULL_A, FULL_B], [[0.1], [0.2]]))
         verbs = [sql.split()[0] for sql, _ in connection.executed]
         assert verbs == ["DELETE", "INSERT", "INSERT"]
-        assert connection.executed[1][1] == ("a", "a 내용", "문서", "[0.1]")
+        assert connection.executed[0][1] == ("ver",)
+        assert connection.executed[1][1] == ("a", "A", "s", "doc", "ver", 0, 1, "[0.1]")
         assert connection.exit_error is None
 
     def test_replace_failure_reaches_transaction_exit(self, connect):
         connection = FakeConnection(fail_on="INSERT")
         connect(connection)
         with pytest.raises(RuntimeError):
-            asyncio.run(stores.PostgresVectorStore("x").replace_document("s", [chunk("a")], [[0.1]]))
+            asyncio.run(stores.PostgresVectorStore("x").replace_version("ver", [FULL_A], [[0.1]]))
         assert connection.exit_error is RuntimeError
 
-    @pytest.mark.xfail(strict=True, reason="결함 3: 청크와 임베딩 개수가 달라도 일부만 저장하고 넘어감")
-    def test_replace_rejects_count_mismatch(self, connect):
-        connect(FakeConnection())
+    def test_replace_rejects_count_mismatch_before_deleting(self, connect):
+        connection = FakeConnection()
+        connect(connection)
         with pytest.raises(ValueError):
-            asyncio.run(stores.PostgresVectorStore("x").replace_document("s", [chunk("a"), chunk("b")], [[0.1]]))
+            asyncio.run(stores.PostgresVectorStore("x").replace_version("ver", [FULL_A, FULL_B], [[0.1]]))
+        assert connection.executed == []

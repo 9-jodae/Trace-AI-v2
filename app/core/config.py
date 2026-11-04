@@ -6,7 +6,33 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 DEFAULT_JEV_MODEL = "jev-latest"
-DEFAULT_EMBEDDING_DIMENSIONS = 1536
+DEFAULT_EMBEDDING_DIMENSIONS = 1024
+
+
+def is_production() -> bool:
+    # 설정이 빠져도 인증과 샘플 차단이 꺼지지 않도록 local을 명시할 때만 개발 모드로 본다
+    return os.getenv("APP_ENV") != "local"
+
+
+def internal_secret() -> str | None:
+    return os.getenv("INTERNAL_SECRET") or None
+
+
+def use_sample_data() -> bool:
+    return not is_production() and os.getenv("USE_SAMPLE_DATA") == "true"
+
+
+def validate_startup() -> None:
+    if not is_production():
+        return
+    if not internal_secret():
+        raise RuntimeError("운영 환경에는 INTERNAL_SECRET이 필요합니다. 로컬 개발이면 APP_ENV=local을 설정하세요.")
+    if os.getenv("USE_SAMPLE_DATA") == "true":
+        raise RuntimeError("운영 환경에서는 USE_SAMPLE_DATA를 사용할 수 없습니다.")
+
+
+def uses_aws_credentials(model: str) -> bool:
+    return model.startswith("bedrock")
 
 
 def jev_api_key() -> str | None:
@@ -25,16 +51,16 @@ def embedding_model() -> str | None:
     return os.getenv("EMBEDDING_MODEL") or None
 
 
+def embedding_dimensions() -> int:
+    return int(os.getenv("EMBEDDING_DIMENSIONS") or DEFAULT_EMBEDDING_DIMENSIONS)
+
+
 def llm_api_key() -> str | None:
     return os.getenv("LLM_API_KEY") or None
 
 
 def llm_model() -> str | None:
     return os.getenv("LLM_MODEL") or None
-
-
-def embedding_dimensions() -> int:
-    return int(os.getenv("EMBEDDING_DIMENSIONS") or DEFAULT_EMBEDDING_DIMENSIONS)
 
 
 def database_url() -> str | None:

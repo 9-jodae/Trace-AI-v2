@@ -1,4 +1,3 @@
-import pytest
 from conftest import chunk
 
 from app.retrieval.fusion import RRF_K, rrf_fuse
@@ -41,7 +40,6 @@ def test_tie_is_stable():
     assert rrf_fuse([[A], [B]], 2) == [A, B]
 
 
-@pytest.mark.xfail(strict=True, reason="결함 9: 한 검색 결과 안의 중복 청크가 RRF 점수를 두 번 받음")
 def test_same_chunk_twice_in_one_ranking_counts_once():
     assert rrf_fuse([[A, A, B], [B, C]], 1) == [B]
 

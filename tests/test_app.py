@@ -95,6 +95,7 @@ class TestProjectFiles:
             "langchain==",
             "langchain-text-splitters",
             "psycopg",
+            "langchain-aws",
             "typesafe-sdk",
             "python-dotenv",
             "pydantic",

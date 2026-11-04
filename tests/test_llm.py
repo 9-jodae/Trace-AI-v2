@@ -55,7 +55,7 @@ class TestGenerateAnswer:
 
     def test_uses_configured_model_and_key(self, model):
         run()
-        assert model.init_calls == [("fake:fake-llm", {"api_key": "fake-llm-key", "max_retries": llm.MAX_RETRIES})]
+        assert model.init_calls == [("fake:fake-llm", {"max_retries": llm.MAX_RETRIES, "api_key": "fake-llm-key"})]
 
     def test_message_order(self, model):
         history = [HumanMessage(content="이전"), AIMessage(content="이전 답")]
@@ -94,7 +94,6 @@ class TestGenerateAnswer:
         with pytest.raises(AiUnavailableError):
             run()
 
-    @pytest.mark.xfail(strict=True, reason="결함 8: LLM이 빈 응답을 주면 빈 답변이 200으로 나감")
     def test_empty_llm_response_is_unavailable(self, model):
         model.content = ""
         with pytest.raises(AiUnavailableError):
@@ -109,3 +108,9 @@ class TestGenerateAnswer:
         with pytest.raises(AiUnavailableError) as error:
             run()
         assert "TimeoutError" in str(error.value)
+
+    def test_bedrock_needs_no_api_key(self, monkeypatch, model):
+        monkeypatch.setenv("LLM_MODEL", "bedrock_converse:some-model")
+        monkeypatch.setenv("LLM_API_KEY", "")
+        assert run() == "답변"
+        assert model.init_calls == [("bedrock_converse:some-model", {"max_retries": llm.MAX_RETRIES})]

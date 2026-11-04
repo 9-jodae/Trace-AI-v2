@@ -7,18 +7,22 @@ from psycopg.rows import dict_row
 from app.retrieval.embedding import embed_documents
 from app.retrieval.schemas import Chunk
 
-# TODO: 실제 스키마에 맞게 수정 (pgvector 확장과 chunks(id, text, source, embedding vector(1536)) 테이블 가정)
+# TODO: 벡터 저장소 확정(#9)과 docs199-Server#15 스키마에 맞게 수정. 아래 컬럼은 가정이다
 VECTOR_SEARCH_SQL = """
-SELECT id::text AS id, text, source
+SELECT id::text AS id, text, source, document_id::text AS document_id, version_id::text AS version_id,
+       char_start, char_end
 FROM chunks
 ORDER BY embedding <=> %s::vector
 LIMIT %s
 """
 CONNECT_TIMEOUT_SECONDS = 5
-DELETE_DOCUMENT_SQL = "DELETE FROM chunks WHERE source = %s"
-INSERT_CHUNK_SQL = "INSERT INTO chunks (id, text, source, embedding) VALUES (%s, %s, %s, %s::vector)"
+DELETE_VERSION_SQL = "DELETE FROM chunks WHERE version_id = %s"
+INSERT_CHUNK_SQL = """
+INSERT INTO chunks (id, text, source, document_id, version_id, char_start, char_end, embedding)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s::vector)
+"""
 
-# TODO: 그래프 DB 구현으로 교체하고, DATABASE_URL이 없을 때만 쓰는 샘플 데이터는 삭제
+# USE_SAMPLE_DATA=true인 로컬 데모에서만 쓰는 샘플 데이터
 SAMPLE_CHUNKS: list[Chunk] = [
     {"id": "remote-1", "source": "재택근무 규정", "text": "재택근무 규정은 인사팀이 소유하며 보안팀이 승인했다."},
     {"id": "remote-2", "source": "재택근무 규정", "text": "재택근무 시 사내 자료는 VPN에 접속한 회사 노트북에서만 열람한다."},
@@ -60,15 +64,26 @@ class PostgresVectorStore:
             cursor = await connection.execute(VECTOR_SEARCH_SQL, (_to_vector(embedding), limit))
             return await cursor.fetchall()
 
-    async def replace_document(self, source: str, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
-        # 재색인 시 줄어든 청크가 남지 않도록 같은 문서의 청크를 한 트랜잭션에서 교체한다
+    async def replace_version(self, version_id: str, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
+        # 재색인 시 줄어든 청크가 남지 않도록 같은 버전의 청크를 한 트랜잭션에서 교체한다
+        pairs = list(zip(chunks, embeddings, strict=True))
         async with await psycopg.AsyncConnection.connect(
             self._database_url, connect_timeout=CONNECT_TIMEOUT_SECONDS
         ) as connection:
-            await connection.execute(DELETE_DOCUMENT_SQL, (source,))
-            for chunk, embedding in zip(chunks, embeddings):
+            await connection.execute(DELETE_VERSION_SQL, (version_id,))
+            for chunk, embedding in pairs:
                 await connection.execute(
-                    INSERT_CHUNK_SQL, (chunk["id"], chunk["text"], chunk["source"], _to_vector(embedding))
+                    INSERT_CHUNK_SQL,
+                    (
+                        chunk["id"],
+                        chunk["text"],
+                        chunk["source"],
+                        chunk["document_id"],
+                        chunk["version_id"],
+                        chunk["char_start"],
+                        chunk["char_end"],
+                        _to_vector(embedding),
+                    ),
                 )
 
 

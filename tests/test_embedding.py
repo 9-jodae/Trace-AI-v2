@@ -26,9 +26,9 @@ def init(monkeypatch):
     return calls
 
 
-def test_passes_model_key_and_1536_dimensions(init):
+def test_passes_model_key_and_dimensions(init):
     asyncio.run(embedding.embed_query("질문"))
-    assert init == [("openai:fake-embedding", {"api_key": "fake-embedding-key", "dimensions": 1536})]
+    assert init == [("openai:fake-embedding", {"api_key": "fake-embedding-key", "dimensions": 1024})]
 
 
 def test_embed_query(init):
@@ -56,3 +56,10 @@ def test_hanging_call_times_out(monkeypatch):
     monkeypatch.setattr(embedding, "TIMEOUT_SECONDS", 0.01)
     with pytest.raises(TimeoutError):
         asyncio.run(embedding.embed_query("질문"))
+
+
+def test_bedrock_uses_aws_credentials_and_model_kwargs(monkeypatch, init):
+    monkeypatch.setenv("EMBEDDING_MODEL", "bedrock:amazon.titan-embed-text-v2:0")
+    monkeypatch.setenv("EMBEDDING_API_KEY", "")
+    asyncio.run(embedding.embed_query("질문"))
+    assert init == [("bedrock:amazon.titan-embed-text-v2:0", {"model_kwargs": {"dimensions": 1024}})]

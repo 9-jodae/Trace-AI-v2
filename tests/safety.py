@@ -6,11 +6,14 @@ import socket
 import dotenv
 
 FAKE_ENV = {
+    "APP_ENV": "local",
+    "INTERNAL_SECRET": "test-internal-secret",
+    "USE_SAMPLE_DATA": "",
     "JEV_API_KEY": "fake-jev-key",
     "JEV_MODEL": "jev-test",
     "EMBEDDING_API_KEY": "fake-embedding-key",
     "EMBEDDING_MODEL": "openai:fake-embedding",
-    "EMBEDDING_DIMENSIONS": "1536",
+    "EMBEDDING_DIMENSIONS": "1024",
     "LLM_API_KEY": "fake-llm-key",
     "LLM_MODEL": "fake:fake-llm",
     "DATABASE_URL": "",
