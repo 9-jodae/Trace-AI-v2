@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from app.agent.graph import build_agent
 from app.agent.router import router as agent_router
+from app.core import config
 from app.core.errors import register_error_handlers
 from app.playground.router import router as playground_router
 
@@ -14,11 +15,24 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="9-jodae Agent API", lifespan=lifespan)
-register_error_handlers(app)
+def create_app() -> FastAPI:
+    config.validate_startup()
+    production = config.is_production()
+    app = FastAPI(
+        title="9-jodae Agent API",
+        lifespan=lifespan,
+        docs_url=None if production else "/docs",
+        redoc_url=None if production else "/redoc",
+        openapi_url=None if production else "/openapi.json",
+    )
+    register_error_handlers(app)
+    app.include_router(agent_router)
+    if not production:
+        app.include_router(playground_router)
+    return app
 
-app.include_router(agent_router)
-app.include_router(playground_router)
+
+app = create_app()
 
 
 if __name__ == "__main__":

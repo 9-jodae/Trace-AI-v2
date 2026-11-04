@@ -29,9 +29,9 @@ class TestConfig:
         monkeypatch.setenv("JEV_MODEL", "")
         assert config.jev_model() == "jev-latest"
 
-    def test_embedding_dimensions_default_is_1536(self, monkeypatch):
+    def test_embedding_dimensions_default_is_titan_1024(self, monkeypatch):
         monkeypatch.setenv("EMBEDDING_DIMENSIONS", "")
-        assert config.embedding_dimensions() == 1536
+        assert config.embedding_dimensions() == 1024
 
     def test_embedding_dimensions_is_int(self, monkeypatch):
         monkeypatch.setenv("EMBEDDING_DIMENSIONS", "768")
@@ -107,13 +107,11 @@ class TestErrorHandlers:
         assert response.status_code == 422
         assert response.json()["code"] == "INVALID_REQUEST"
 
-    @pytest.mark.xfail(strict=True, reason="결함 10: 404가 공통 에러 형식을 따르지 않음")
     def test_not_found_uses_same_format(self, error_client):
         response = error_client.get("/none")
         assert response.status_code == 404
         assert set(response.json()) == {"code", "message"}
 
-    @pytest.mark.xfail(strict=True, reason="결함 10: 405가 공통 에러 형식을 따르지 않음")
     def test_method_not_allowed_uses_same_format(self, error_client):
         response = error_client.delete("/boom")
         assert response.status_code == 405

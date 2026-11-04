@@ -66,8 +66,8 @@ def counter(monkeypatch):
     monkeypatch.setattr(embedding, "init_embeddings", lambda model, **kwargs: FakeEmbedder(calls))
     monkeypatch.setattr(llm_client, "init_chat_model", lambda model, **kwargs: FakeChatModel(calls))
     monkeypatch.setattr(jev_client, "AsyncTypeSafeClient", FakeJevClient)
-    monkeypatch.setattr(service, "vector_store", stores.SampleVectorStore())
-    monkeypatch.setattr(service, "graph_store", stores.SampleGraphStore())
+    monkeypatch.setenv("USE_SAMPLE_DATA", "true")
+    service._sample_stores.cache_clear()
     return calls
 
 
@@ -130,6 +130,6 @@ def test_database_connection_failure_only_disables_vector_search(client, counter
         raise OSError("connection refused")
 
     monkeypatch.setattr(stores.psycopg.AsyncConnection, "connect", refuse)
-    monkeypatch.setattr(service, "vector_store", stores.PostgresVectorStore("postgresql://db"))
+    monkeypatch.setattr(service, "get_stores", lambda: (stores.PostgresVectorStore("db"), stores.SampleGraphStore()))
     body = post(client, "결제 서비스").json()
     assert body["failedSources"] == ["vector"] and body["sources"]

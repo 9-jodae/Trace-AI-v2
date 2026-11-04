@@ -1,11 +1,12 @@
 from uuid import uuid4
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from langchain_core.messages import HumanMessage
 
 from app.agent.schemas import ChatRequest, ChatResponse
+from app.core.auth import require_internal_secret
 
-router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
+router = APIRouter(prefix="/api/v1/agent", tags=["agent"], dependencies=[Depends(require_internal_secret)])
 
 
 @router.post("/chat")
