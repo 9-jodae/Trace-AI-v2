@@ -52,13 +52,7 @@ class QdrantVectorStore:
     async def replace_version(self, version_id: str, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
         pairs = list(zip(chunks, embeddings, strict=True))
         await self._ensure_collection(len(embeddings[0]))
-        await self._client.delete(
-            self._collection,
-            points_selector=models.Filter(
-                must=[models.FieldCondition(key="version_id", match=models.MatchValue(value=version_id))]
-            ),
-            wait=True,
-        )
+        # 저장이 끝난 뒤 남은 청크만 지워, 중간에 실패해도 기존 청크가 사라지지 않게 한다
         for start in range(0, len(pairs), UPSERT_BATCH_SIZE):
             await self._client.upsert(
                 self._collection,
@@ -68,3 +62,11 @@ class QdrantVectorStore:
                 ],
                 wait=True,
             )
+        await self._client.delete(
+            self._collection,
+            points_selector=models.Filter(
+                must=[models.FieldCondition(key="version_id", match=models.MatchValue(value=version_id))],
+                must_not=[models.HasIdCondition(has_id=[chunk["id"] for chunk in chunks])],
+            ),
+            wait=True,
+        )

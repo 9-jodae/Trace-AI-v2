@@ -13,6 +13,7 @@ SCHEMA_STATEMENTS = (
     "CREATE CONSTRAINT document_id IF NOT EXISTS FOR (d:Document) REQUIRE d.document_id IS UNIQUE",
     "CREATE CONSTRAINT chunk_id IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE",
     "CREATE FULLTEXT INDEX chunk_text IF NOT EXISTS FOR (c:Chunk) ON EACH [c.text]",
+    "CALL db.awaitIndex('chunk_text', 300)",
 )
 FULLTEXT_SEARCH_CYPHER = """
 CALL db.index.fulltext.queryNodes('chunk_text', $query) YIELD node AS c, score

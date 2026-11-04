@@ -2,7 +2,9 @@ import asyncio
 
 import pytest
 from conftest import chunk
+from fastapi.testclient import TestClient
 
+import main
 from app.core import config
 from app.core.errors import AiUnavailableError
 from app.retrieval import service
@@ -213,4 +215,16 @@ class TestPermissionFailsClosed:
     def test_local_group_setting_is_parsed(self, monkeypatch):
         monkeypatch.setenv("ALLOWED_GROUP_IDS", " a , ,b ")
         assert config.allowed_group_ids() == ["a", "b"]
+
+
+def test_app_shutdown_closes_stores(monkeypatch):
+    closed = []
+
+    async def fake_close():
+        closed.append(True)
+
+    monkeypatch.setattr(main, "close_stores", fake_close)
+    with TestClient(main.create_app()):
+        assert closed == []
+    assert closed == [True]
 

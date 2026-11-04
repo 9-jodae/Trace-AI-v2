@@ -62,6 +62,14 @@ def test_no_groups_returns_nothing():
     assert run(scenario) == []
 
 
+def test_no_groups_does_not_query_the_server():
+    class Forbidden:
+        async def query_points(self, **kwargs):
+            raise AssertionError("서버에 조회하면 안 됩니다")
+
+    assert asyncio.run(QdrantVectorStore(Forbidden(), "test").search([1.0, 0.0], 5, [])) == []
+
+
 def test_orders_by_similarity_and_limits():
     async def scenario(store):
         await store.replace_version("v1", [make_chunk(1), make_chunk(2)], [[0.0, 1.0], [1.0, 0.0]])
@@ -106,3 +114,29 @@ def test_count_mismatch_changes_nothing():
         return await store.search([1.0, 0.0], 5, ["hr"])
 
     assert texts(run(scenario)) == ["청크 1"]
+
+
+def test_upsert_failure_keeps_existing_chunks(monkeypatch):
+    async def scenario(store):
+        await store.replace_version("v1", [make_chunk(1)], [[1.0, 0.0]])
+
+        async def fail(*args, **kwargs):
+            raise RuntimeError("저장 실패")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(store._client, "upsert", fail)
+            with pytest.raises(RuntimeError):
+                await store.replace_version("v1", [make_chunk(2)], [[1.0, 0.0]])
+        return await store.search([1.0, 0.0], 5, ["hr"])
+
+    assert texts(run(scenario)) == ["청크 1"]
+
+
+def test_reindex_removes_chunks_no_longer_present():
+    async def scenario(store):
+        await store.replace_version("v1", [make_chunk(1), make_chunk(2)], [[1.0, 0.0], [1.0, 0.0]])
+        await store.replace_version("v1", [make_chunk(1)], [[1.0, 0.0]])
+        return await store.search([1.0, 0.0], 5, ["hr"])
+
+    assert texts(run(scenario)) == ["청크 1"]
+

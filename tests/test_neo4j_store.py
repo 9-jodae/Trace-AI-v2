@@ -123,7 +123,8 @@ class TestReplaceVersion:
     def test_schema_is_created_first(self):
         driver = FakeDriver()
         asyncio.run(Neo4jGraphStore(driver).replace_version("v", "d", {}, []))
-        assert driver.calls[0][0] == neo4j_store.SCHEMA_STATEMENTS[0]
+        assert [call[0] for call in driver.calls[:4]] == list(neo4j_store.SCHEMA_STATEMENTS)
+        assert "awaitIndex" in neo4j_store.SCHEMA_STATEMENTS[-1]
 
 
 def test_close_closes_driver():
