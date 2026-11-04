@@ -7,6 +7,7 @@ from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
 from app.core import config
+from app.core.errors import describe_exception
 from app.jev.client import can_answer_probability
 from app.llm.client import generate_answer
 from app.retrieval.schemas import Chunk
@@ -45,7 +46,7 @@ async def judge_context(state: AgentState) -> dict:
     try:
         probability = await can_answer_probability(state["messages"][-1].text, context, history)
     except Exception as exc:
-        logger.exception("JEV judge failed")
+        logger.error("JEV judge failed: %s", describe_exception(exc))
         return {**decision, "fallback_reason": f"JEV 호출 실패 ({type(exc).__name__})"}
     route = "CONTEXT" if probability >= CONTEXT_REUSE_THRESHOLD else "SEARCH"
     return {**decision, "route": route, "context_probability": probability}

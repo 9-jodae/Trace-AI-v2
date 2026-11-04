@@ -5,7 +5,7 @@ from langchain.chat_models import init_chat_model
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from app.core import config
-from app.core.errors import AiUnavailableError
+from app.core.errors import AiUnavailableError, describe_exception
 from app.retrieval.schemas import Chunk
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ async def generate_answer(question: str, context: list[Chunk], history: list[Bas
         ]
         response = await asyncio.wait_for(model.ainvoke(messages), TIMEOUT_SECONDS)
     except Exception as exc:
-        logger.exception("LLM call failed")
+        logger.error("LLM call failed: %s", describe_exception(exc))
         raise AiUnavailableError(f"LLM 호출 실패 ({type(exc).__name__})") from exc
     if not response.text.strip():
         raise AiUnavailableError("LLM이 빈 응답을 반환했습니다.")

@@ -1,4 +1,6 @@
 import logging
+import traceback
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -16,6 +18,17 @@ HTTP_ERRORS = {
 }
 
 
+def describe_exception(exc: BaseException) -> str:
+    """외부 오류 원문에는 질문이나 문서 본문이 섞일 수 있어 유형, 상태 코드, 발생 위치만 남긴다."""
+    status = next(
+        (value for name in ("status_code", "code") if isinstance(value := getattr(exc, name, None), int)),
+        None,
+    )
+    frames = traceback.extract_tb(exc.__traceback__)
+    location = f" at {Path(frames[-1].filename).name}:{frames[-1].lineno}" if frames else ""
+    return f"{type(exc).__name__}{f' ({status})' if status else ''}{location}"
+
+
 class AiUnavailableError(Exception):
     """검색이나 LLM을 사용할 수 없어 답변을 만들 수 없는 상태."""
 
@@ -27,7 +40,7 @@ async def handle_ai_unavailable(request: Request, exc: AiUnavailableError) -> JS
 
 
 async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
-    logger.exception("Unhandled error: %s %s", request.method, request.url.path, exc_info=exc)
+    logger.error("Unhandled error: %s %s: %s", request.method, request.url.path, describe_exception(exc))
     body = ErrorResponse(code="INTERNAL_ERROR", message="요청 처리 중 오류가 발생했습니다.")
     return JSONResponse(status_code=500, content=body.model_dump(by_alias=True))
 

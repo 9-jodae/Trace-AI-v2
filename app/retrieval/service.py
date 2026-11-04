@@ -5,7 +5,7 @@ from functools import cache
 from typing_extensions import TypedDict
 
 from app.core import config
-from app.core.errors import AiUnavailableError
+from app.core.errors import AiUnavailableError, describe_exception
 from app.retrieval.embedding import embed_query
 from app.retrieval.fusion import rrf_fuse
 from app.retrieval.schemas import Chunk
@@ -51,7 +51,7 @@ async def search(query: str) -> SearchResult:
     failed = []
     for name, result in zip(names, results):
         if isinstance(result, Exception):
-            logger.error("%s search failed: %s", name, type(result).__name__)
+            logger.error("%s search failed: %s", name, describe_exception(result))
             failed.append(name)
         else:
             rankings.append(result)
