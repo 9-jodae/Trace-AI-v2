@@ -2,7 +2,8 @@ from uuid import UUID
 
 import pytest
 
-from app.retrieval.chunking import CHUNK_OVERLAP, CHUNK_SIZE, chunk_document
+from app.retrieval import chunking
+from app.retrieval.chunking import CHUNK_OVERLAP, CHUNK_SIZE, SEPARATORS, chunk_document, settings_fingerprint
 
 KOREAN_DOC = "재택근무 규정은 인사팀이 소유한다. 보안팀이 승인했다. " * 60
 
@@ -93,3 +94,19 @@ def test_chunks_have_uuid_ids_and_source():
     assert all(UUID(chunk["id"]) for chunk in chunks)
     assert all(chunk["source"] == "문서" for chunk in chunks)
     assert all(len(chunk["text"]) <= CHUNK_SIZE for chunk in chunks)
+
+
+def test_changing_settings_changes_chunk_ids(monkeypatch):
+    before = {c["id"] for c in chunk_document("doc", "ver", KOREAN_DOC, "s")}
+    monkeypatch.setattr(chunking, "SETTINGS_FINGERPRINT", settings_fingerprint(400, 50, SEPARATORS))
+    after = {c["id"] for c in chunk_document("doc", "ver", KOREAN_DOC, "s")}
+    assert not before & after
+
+
+def test_fingerprint_reflects_each_setting():
+    base = settings_fingerprint(CHUNK_SIZE, CHUNK_OVERLAP, SEPARATORS)
+    assert base != settings_fingerprint(CHUNK_SIZE + 1, CHUNK_OVERLAP, SEPARATORS)
+    assert base != settings_fingerprint(CHUNK_SIZE, CHUNK_OVERLAP + 1, SEPARATORS)
+    assert base != settings_fingerprint(CHUNK_SIZE, CHUNK_OVERLAP, SEPARATORS[1:])
+    assert chunking.SETTINGS_FINGERPRINT == base
+

@@ -7,11 +7,19 @@ from app.retrieval.schemas import Chunk
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
 
-# 재색인해도 같은 위치의 청크가 같은 UUID를 갖도록 버전 ID와 순번으로 만든다
+# 같은 버전과 같은 청킹 설정이면 재색인해도 같은 UUID가 나온다
 CHUNK_ID_NAMESPACE = UUID("6f0f6a55-6a8e-4f0f-9f55-0d1a9c199a11")
 
 # 문단, 줄, 문장, 단어 순으로 큰 단위부터 나눈다
 SEPARATORS = ["\n\n", "\n", "다. ", ". ", "? ", "! ", " ", ""]
+
+
+def settings_fingerprint(size: int, overlap: int, separators: list[str]) -> str:
+    # 설정이 바뀌면 같은 순번의 청크 내용도 달라지므로 ID가 이전 청크를 가리키지 않게 한다
+    return f"{size}:{overlap}:{separators!r}"
+
+
+SETTINGS_FINGERPRINT = settings_fingerprint(CHUNK_SIZE, CHUNK_OVERLAP, SEPARATORS)
 
 splitter = RecursiveCharacterTextSplitter(
     chunk_size=CHUNK_SIZE,
@@ -28,7 +36,7 @@ def chunk_document(document_id: str, version_id: str, text: str, source: str) ->
         start = piece.metadata["start_index"]
         chunks.append(
             {
-                "id": str(uuid5(CHUNK_ID_NAMESPACE, f"{version_id}:{index}")),
+                "id": str(uuid5(CHUNK_ID_NAMESPACE, f"{SETTINGS_FINGERPRINT}:{version_id}:{index}")),
                 "text": piece.page_content,
                 "source": source,
                 "document_id": document_id,
