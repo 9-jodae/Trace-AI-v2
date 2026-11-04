@@ -7,7 +7,11 @@ select = ["E", "F", "I"]
 
 [tool.ruff.lint.per-file-ignores]
 "app/retrieval/stores.py" = ["E501"]
+# 실제 키와 외부 네트워크를 막는 안전장치가 app import보다 먼저 실행되어야 한다
+"tests/conftest.py" = ["E402"]
+"tests/e2e/fake_server.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = ["e2e: 헤드리스 Chrome으로 페이지를 확인하는 테스트"]

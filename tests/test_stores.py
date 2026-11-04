@@ -1,0 +1,156 @@
+import asyncio
+
+import pytest
+from conftest import chunk
+
+from app.retrieval import stores
+
+
+async def fake_embed_documents(texts):
+    fake_embed_documents.calls += 1
+    return [[1.0, 0.0] if "승인" in text else [0.0, 1.0] for text in texts]
+
+
+class TestCosine:
+    def test_identical(self):
+        assert stores._cosine([1.0, 0.0], [1.0, 0.0]) == pytest.approx(1.0)
+
+    def test_orthogonal(self):
+        assert stores._cosine([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
+
+    def test_zero_vector_does_not_crash(self):
+        assert stores._cosine([0.0, 0.0], [1.0, 0.0]) == 0.0
+
+    def test_1536_dimensions(self):
+        vector = [0.5] * 1536
+        assert stores._cosine(vector, vector) == pytest.approx(1.0)
+
+
+def test_to_vector_format():
+    assert stores._to_vector([0.5, 1.0, -2.0]) == "[0.5,1.0,-2.0]"
+
+
+class TestSampleVectorStore:
+    @pytest.fixture(autouse=True)
+    def embed(self, monkeypatch):
+        fake_embed_documents.calls = 0
+        monkeypatch.setattr(stores, "embed_documents", fake_embed_documents)
+
+    def test_most_similar_first(self):
+        result = asyncio.run(stores.SampleVectorStore().search([1.0, 0.0], 1))
+        assert result[0]["id"] == "remote-1"
+
+    def test_limit(self):
+        assert len(asyncio.run(stores.SampleVectorStore().search([1.0, 0.0], 2))) == 2
+
+    def test_document_embeddings_are_cached(self):
+        store = stores.SampleVectorStore()
+
+        async def twice():
+            await store.search([1.0, 0.0], 1)
+            await store.search([1.0, 0.0], 1)
+
+        asyncio.run(twice())
+        assert fake_embed_documents.calls == 1
+
+
+class TestSampleGraphStore:
+    @pytest.mark.parametrize(
+        "query, expected",
+        [
+            ("재택근무 규정을 승인한 곳", ["remote-1", "remote-3"]),
+            ("재택근무규정 승인", ["remote-1", "remote-3"]),
+            ("결제 서비스 담당", ["payment-1", "payment-2"]),
+            ("관계없는 질문", []),
+        ],
+    )
+    def test_entity_match(self, query, expected):
+        assert [c["id"] for c in asyncio.run(stores.SampleGraphStore().search(query, 10))] == expected
+
+    def test_limit(self):
+        assert len(asyncio.run(stores.SampleGraphStore().search("재택근무 규정", 1))) == 1
+
+
+class FakeCursor:
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def fetchall(self):
+        return self.rows
+
+
+class FakeConnection:
+    def __init__(self, rows=None, fail_on=None):
+        self.rows = rows or []
+        self.fail_on = fail_on
+        self.executed = []
+        self.exit_error = "not closed"
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, error_type, error, traceback):
+        self.exit_error = error_type
+
+    async def execute(self, sql, params):
+        self.executed.append((sql, params))
+        if self.fail_on and sql.strip().startswith(self.fail_on):
+            raise RuntimeError("db error")
+        return FakeCursor(self.rows)
+
+
+@pytest.fixture
+def connect(monkeypatch):
+    def install(connection):
+        async def fake_connect(url, **kwargs):
+            install.url = url
+            install.kwargs = kwargs
+            return connection
+
+        monkeypatch.setattr(stores.psycopg.AsyncConnection, "connect", fake_connect)
+
+    return install
+
+
+class TestPostgresVectorStore:
+    def test_search_query_and_params(self, connect):
+        connection = FakeConnection(rows=[chunk("a")])
+        connect(connection)
+        result = asyncio.run(stores.PostgresVectorStore("postgresql://db").search([0.5, 1.0], 3))
+        assert result == [chunk("a")]
+        sql, params = connection.executed[0]
+        assert "<=>" in sql and "LIMIT" in sql and sql.lstrip().startswith("SELECT")
+        assert params == ("[0.5,1.0]", 3)
+        assert connect.url == "postgresql://db"
+        assert connect.kwargs["connect_timeout"] == stores.CONNECT_TIMEOUT_SECONDS
+
+    def test_search_never_writes(self, connect):
+        connection = FakeConnection()
+        connect(connection)
+        asyncio.run(stores.PostgresVectorStore("x").search([1.0], 1))
+        assert not any(word in connection.executed[0][0].upper() for word in ["INSERT", "DELETE", "UPDATE", "DROP"])
+
+    def test_values_are_parameterized(self):
+        assert "%s" in stores.VECTOR_SEARCH_SQL and "{" not in stores.VECTOR_SEARCH_SQL
+
+    def test_replace_deletes_then_inserts(self, connect):
+        connection = FakeConnection()
+        connect(connection)
+        asyncio.run(stores.PostgresVectorStore("x").replace_document("s", [chunk("a"), chunk("b")], [[0.1], [0.2]]))
+        verbs = [sql.split()[0] for sql, _ in connection.executed]
+        assert verbs == ["DELETE", "INSERT", "INSERT"]
+        assert connection.executed[1][1] == ("a", "a 내용", "문서", "[0.1]")
+        assert connection.exit_error is None
+
+    def test_replace_failure_reaches_transaction_exit(self, connect):
+        connection = FakeConnection(fail_on="INSERT")
+        connect(connection)
+        with pytest.raises(RuntimeError):
+            asyncio.run(stores.PostgresVectorStore("x").replace_document("s", [chunk("a")], [[0.1]]))
+        assert connection.exit_error is RuntimeError
+
+    @pytest.mark.xfail(strict=True, reason="결함 3: 청크와 임베딩 개수가 달라도 일부만 저장하고 넘어감")
+    def test_replace_rejects_count_mismatch(self, connect):
+        connect(FakeConnection())
+        with pytest.raises(ValueError):
+            asyncio.run(stores.PostgresVectorStore("x").replace_document("s", [chunk("a"), chunk("b")], [[0.1]]))
