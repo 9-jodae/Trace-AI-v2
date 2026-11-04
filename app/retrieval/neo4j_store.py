@@ -116,7 +116,8 @@ class Neo4jGraphStore:
 
     @classmethod
     def from_uri(cls, uri: str, user: str, password: str, database: str | None) -> "Neo4jGraphStore":
-        return cls(AsyncGraphDatabase.driver(uri, auth=(user, password), connection_timeout=5), database)
+        driver = AsyncGraphDatabase.driver(uri, auth=(user, password), connection_timeout=CONNECT_TIMEOUT_SECONDS)
+        return cls(driver, database)
 
     async def close(self) -> None:
         await self._driver.close()

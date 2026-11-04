@@ -243,3 +243,21 @@ def test_self_reference_stays_pending():
     asyncio.run(service.resolve_references(normalized, FakeGraph()))
     assert normalized.references[0].reason == "SELF_REFERENCE"
     assert normalized.references[0].status == "REVIEW_REQUIRED"
+
+
+def test_reference_retry_revalidates_previous_target_and_removes_stale_reasons():
+    async def scenario():
+        normalized = normalize_document(submission(), candidate())
+        target = [{"document_id": "b", "version_id": "b1"}]
+        await service.resolve_references(normalized, FakeGraph(target))
+        assert normalized.references[0].status == "VALIDATED"
+        await service.resolve_references(normalized, FakeGraph())
+        assert normalized.references[0].status == "REVIEW_REQUIRED"
+        assert normalized.references[0].target_document_id is None
+        assert normalized.references[0].target_version_id is None
+        assert "TARGET_UNRESOLVED" in normalized.review_reasons
+        await service.resolve_references(normalized, FakeGraph(target))
+        assert normalized.references[0].status == "VALIDATED"
+        assert "TARGET_UNRESOLVED" not in normalized.review_reasons
+
+    asyncio.run(scenario())

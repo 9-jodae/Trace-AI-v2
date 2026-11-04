@@ -30,7 +30,14 @@ async def prepare_document(document: DocumentSubmission) -> NormalizedDocument:
 
 
 async def resolve_references(document: NormalizedDocument, graph_store) -> None:
+    resolution_reasons = {"SELF_REFERENCE", "AMBIGUOUS_TARGET", "TARGET_UNRESOLVED"}
+    document.review_reasons = [reason for reason in document.review_reasons if reason not in resolution_reasons]
     for reference in document.references:
+        # 같은 정규화 객체를 재시도해도 이전 대상·검증 상태를 신뢰하지 않고 다시 조회한다.
+        reference.target_document_id = None
+        reference.target_version_id = None
+        reference.status = "REVIEW_REQUIRED"
+        reference.reason = "TARGET_UNRESOLVED"
         if reference.target_title.casefold() == document.title.casefold():
             reference.reason = "SELF_REFERENCE"
         else:
