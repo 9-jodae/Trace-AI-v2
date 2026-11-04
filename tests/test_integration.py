@@ -131,6 +131,7 @@ def test_database_connection_failure_only_disables_vector_search(client, counter
         raise OSError("connection refused")
 
     monkeypatch.setattr(stores.psycopg.AsyncConnection, "connect", refuse)
+    monkeypatch.setenv("ALLOWED_GROUP_IDS", "all-staff")
     monkeypatch.setattr(service, "get_stores", lambda: (stores.PostgresVectorStore("db"), stores.SampleGraphStore()))
     body = post(client, "결제 서비스").json()
     assert body["failedSources"] == ["vector"] and body["sources"]

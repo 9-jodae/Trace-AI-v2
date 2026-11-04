@@ -35,6 +35,41 @@ def use_sample_data() -> bool:
     return not is_production() and os.getenv("USE_SAMPLE_DATA") == "true"
 
 
+def allowed_group_ids() -> list[str]:
+    # 운영에서는 사용자별 권한을 요청으로 받아야 하므로 환경 변수로 열어 주지 않는다 (AccessScope 계약 대기)
+    if is_production():
+        return []
+    return [group.strip() for group in os.getenv("ALLOWED_GROUP_IDS", "").split(",") if group.strip()]
+
+
+def vector_store() -> str | None:
+    return os.getenv("VECTOR_STORE") or None
+
+
+def qdrant_url() -> str | None:
+    return os.getenv("QDRANT_URL") or None
+
+
+def qdrant_collection() -> str:
+    return os.getenv("QDRANT_COLLECTION") or "internal_chunks"
+
+
+def neo4j_uri() -> str | None:
+    return os.getenv("NEO4J_URI") or None
+
+
+def neo4j_user() -> str:
+    return os.getenv("NEO4J_USER") or "neo4j"
+
+
+def neo4j_password() -> str | None:
+    return os.getenv("NEO4J_PASSWORD") or None
+
+
+def neo4j_database() -> str | None:
+    return os.getenv("NEO4J_DATABASE") or None
+
+
 def validate_startup() -> None:
     if not is_production():
         return

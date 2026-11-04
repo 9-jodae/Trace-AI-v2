@@ -5,13 +5,14 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.retrieval.embedding import embed_documents
-from app.retrieval.schemas import Chunk
+from app.retrieval.schemas import ACTIVE_STATUS, Chunk
 
-# TODO: 벡터 저장소 확정(#9)과 docs199-Server#15 스키마에 맞게 수정. 아래 컬럼은 가정이다
+# TODO: 벡터 저장소 비교 결정과 docs199-Server#15 스키마에 맞게 수정. 아래 컬럼은 가정이다
 VECTOR_SEARCH_SQL = """
 SELECT id::text AS id, text, source, document_id::text AS document_id, version_id::text AS version_id,
        char_start, char_end
 FROM chunks
+WHERE status = %s AND allowed_group_ids && %s::text[]
 ORDER BY embedding <=> %s::vector
 LIMIT %s
 """
@@ -20,8 +21,9 @@ SEARCH_STATEMENT_TIMEOUT_MS = 5_000
 WRITE_STATEMENT_TIMEOUT_MS = 60_000
 DELETE_VERSION_SQL = "DELETE FROM chunks WHERE version_id = %s"
 INSERT_CHUNK_SQL = """
-INSERT INTO chunks (id, text, source, document_id, version_id, char_start, char_end, embedding)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s::vector)
+INSERT INTO chunks (id, text, source, document_id, version_id, char_start, char_end, status, allowed_group_ids,
+                    embedding)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector)
 """
 
 # USE_SAMPLE_DATA=true인 로컬 데모에서만 쓰는 샘플 데이터
@@ -39,11 +41,11 @@ SAMPLE_ENTITIES = {
 
 
 class VectorStore(Protocol):
-    async def search(self, embedding: list[float], limit: int) -> list[Chunk]: ...
+    async def search(self, embedding: list[float], limit: int, allowed_groups: list[str]) -> list[Chunk]: ...
 
 
 class GraphStore(Protocol):
-    async def search(self, query: str, limit: int) -> list[Chunk]: ...
+    async def search(self, query: str, limit: int, allowed_groups: list[str]) -> list[Chunk]: ...
 
 
 def _to_vector(embedding: list[float]) -> str:
@@ -59,14 +61,21 @@ class PostgresVectorStore:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
 
-    async def search(self, embedding: list[float], limit: int) -> list[Chunk]:
+    async def close(self) -> None:
+        pass
+
+    async def search(self, embedding: list[float], limit: int, allowed_groups: list[str]) -> list[Chunk]:
+        if not allowed_groups:
+            return []
         async with await psycopg.AsyncConnection.connect(
             self._database_url,
             row_factory=dict_row,
             connect_timeout=CONNECT_TIMEOUT_SECONDS,
             options=f"-c statement_timeout={SEARCH_STATEMENT_TIMEOUT_MS}",
         ) as connection:
-            cursor = await connection.execute(VECTOR_SEARCH_SQL, (_to_vector(embedding), limit))
+            cursor = await connection.execute(
+                VECTOR_SEARCH_SQL, (ACTIVE_STATUS, allowed_groups, _to_vector(embedding), limit)
+            )
             return await cursor.fetchall()
 
     async def replace_version(self, version_id: str, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
@@ -90,6 +99,8 @@ class PostgresVectorStore:
                             chunk["version_id"],
                             chunk["char_start"],
                             chunk["char_end"],
+                            chunk["status"],
+                            chunk["allowed_group_ids"],
                             _to_vector(embedding),
                         )
                         for chunk, embedding in pairs
@@ -101,7 +112,7 @@ class SampleVectorStore:
     def __init__(self) -> None:
         self._embeddings: list[list[float]] | None = None
 
-    async def search(self, embedding: list[float], limit: int) -> list[Chunk]:
+    async def search(self, embedding: list[float], limit: int, allowed_groups: list[str]) -> list[Chunk]:
         if self._embeddings is None:
             self._embeddings = await embed_documents([chunk["text"] for chunk in SAMPLE_CHUNKS])
         scored = zip(SAMPLE_CHUNKS, self._embeddings)
@@ -110,7 +121,7 @@ class SampleVectorStore:
 
 
 class SampleGraphStore:
-    async def search(self, query: str, limit: int) -> list[Chunk]:
+    async def search(self, query: str, limit: int, allowed_groups: list[str]) -> list[Chunk]:
         normalized = "".join(query.split()).casefold()
         linked = [
             chunk_id

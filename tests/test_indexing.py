@@ -1,61 +1,101 @@
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
 
 from app.core.errors import AiUnavailableError
 from app.retrieval import indexing
 
-DOC = "재택근무 규정은 인사팀이 소유한다. " * 100
+DOC_TEXT = "재택근무 규정은 인사팀이 소유한다. " * 100
+DOCUMENT = {
+    "document_id": "doc",
+    "version_id": "ver",
+    "text": DOC_TEXT,
+    "source": "규정",
+    "status": "유효",
+    "allowed_group_ids": ["hr"],
+}
 
 
 @pytest.fixture
 def setup(monkeypatch):
-    state = {"embedded": [], "replaced": []}
+    state = {"embedded": [], "vector": [], "graph": [], "closed": 0}
 
     async def embed(texts):
         state["embedded"].append(texts)
         return [[0.1] for _ in texts]
 
-    class Store:
-        def __init__(self, url):
-            state["url"] = url
-
+    class Vector:
         async def replace_version(self, version_id, chunks, embeddings):
-            state["replaced"].append((version_id, chunks, embeddings))
+            state["vector"].append((version_id, chunks, embeddings))
 
-    monkeypatch.setenv("DATABASE_URL", "postgresql://db")
+    class Graph:
+        async def replace_version(self, version_id, document_id, document, chunks):
+            state["graph"].append((version_id, document_id, document, chunks))
+
+    async def close():
+        state["closed"] += 1
+
     monkeypatch.setattr(indexing, "embed_documents", embed)
-    monkeypatch.setattr(indexing, "PostgresVectorStore", Store)
+    monkeypatch.setattr(indexing, "get_real_stores", lambda: (Vector(), Graph()))
+    monkeypatch.setattr(indexing, "close_stores", close)
     return state
 
 
-def test_chunks_embeds_and_stores(setup):
-    count = asyncio.run(indexing.index_document("doc", "ver", DOC, "규정"))
-    source, chunks, embeddings = setup["replaced"][0]
+def test_chunks_embeds_and_writes_both_stores(setup):
+    count = asyncio.run(indexing.index_document(DOCUMENT))
+    version, chunks, embeddings = setup["vector"][0]
     assert count == len(chunks) == len(embeddings) > 1
-    assert source == "ver"
-    assert setup["url"] == "postgresql://db"
+    assert version == "ver"
+    graph_version, document_id, metadata, graph_chunks = setup["graph"][0]
+    assert (graph_version, document_id) == ("ver", "doc") and graph_chunks == chunks
 
 
 def test_embeds_chunk_text(setup):
-    asyncio.run(indexing.index_document("doc", "ver", DOC, "규정"))
-    assert setup["embedded"][0] == [c["text"] for c in setup["replaced"][0][1]]
+    asyncio.run(indexing.index_document(DOCUMENT))
+    assert setup["embedded"][0] == [c["text"] for c in setup["vector"][0][1]]
 
 
-def test_missing_database_url_raises_before_embedding(setup, monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", "")
+def test_chunks_carry_permission_fields(setup):
+    asyncio.run(indexing.index_document(DOCUMENT))
+    assert all(c["status"] == "유효" and c["allowed_group_ids"] == ["hr"] for c in setup["vector"][0][1])
+
+
+def test_document_text_is_not_copied_to_metadata(setup):
+    asyncio.run(indexing.index_document(DOCUMENT))
+    assert "text" not in setup["graph"][0][2]
+
+
+def test_blank_document_does_not_touch_stores(setup):
+    assert asyncio.run(indexing.index_document({**DOCUMENT, "text": "   "})) == 0
+    assert setup["vector"] == [] and setup["graph"] == [] and setup["embedded"] == []
+
+
+def test_missing_stores_fail_without_silent_success(monkeypatch):
+    async def embed(texts):
+        return [[0.1] for _ in texts]
+
+    monkeypatch.setattr(indexing, "embed_documents", embed)
     with pytest.raises(AiUnavailableError):
-        asyncio.run(indexing.index_document("doc", "ver", DOC, "규정"))
-    assert setup["embedded"] == []
+        asyncio.run(indexing.index_document(DOCUMENT))
 
 
-def test_blank_document_does_not_delete_existing_chunks(setup):
-    assert asyncio.run(indexing.index_document("doc", "ver", "   ", "규정")) == 0
-    assert setup["replaced"] == []
-    assert setup["embedded"] == []
+def test_load_demo_documents():
+    path = Path(__file__).parents[1] / "data/demo_documents.json"
+    documents = indexing.load_documents(path)
+    assert len(documents) == 8
+    assert all(d["text"] and d["allowed_group_ids"] and d["version_id"] for d in documents)
 
 
-def test_reindex_is_scoped_to_version_not_source(setup):
-    # 출처 이름이 같은 다른 문서의 청크가 함께 지워지면 안 된다
-    asyncio.run(indexing.index_document("doc", "ver-A", DOC, "같은 출처"))
-    assert setup["replaced"][0][0] == "ver-A"
+def test_explicit_version_is_kept(tmp_path):
+    path = tmp_path / "docs.json"
+    item = {"doc_id": "d", "version_id": "v2", "title": "t", "text": "x", "status": "유효", "allowed_group_ids": ["a"]}
+    path.write_text(json.dumps([item]), encoding="utf-8")
+    assert indexing.load_documents(path)[0]["version_id"] == "v2"
+
+
+def test_index_file_indexes_all_and_closes(setup):
+    path = Path(__file__).parents[1] / "data/demo_documents.json"
+    assert asyncio.run(indexing.index_file(path)) > 0
+    assert len(setup["vector"]) == 8 and setup["closed"] == 1

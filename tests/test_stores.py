@@ -4,6 +4,7 @@ import pytest
 from conftest import chunk
 
 from app.retrieval import stores
+from app.retrieval.schemas import ACTIVE_STATUS
 
 
 async def fake_embed_documents(texts):
@@ -37,18 +38,18 @@ class TestSampleVectorStore:
         monkeypatch.setattr(stores, "embed_documents", fake_embed_documents)
 
     def test_most_similar_first(self):
-        result = asyncio.run(stores.SampleVectorStore().search([1.0, 0.0], 1))
+        result = asyncio.run(stores.SampleVectorStore().search([1.0, 0.0], 1, []))
         assert result[0]["id"] == "remote-1"
 
     def test_limit(self):
-        assert len(asyncio.run(stores.SampleVectorStore().search([1.0, 0.0], 2))) == 2
+        assert len(asyncio.run(stores.SampleVectorStore().search([1.0, 0.0], 2, []))) == 2
 
     def test_document_embeddings_are_cached(self):
         store = stores.SampleVectorStore()
 
         async def twice():
-            await store.search([1.0, 0.0], 1)
-            await store.search([1.0, 0.0], 1)
+            await store.search([1.0, 0.0], 1, [])
+            await store.search([1.0, 0.0], 1, [])
 
         asyncio.run(twice())
         assert fake_embed_documents.calls == 1
@@ -65,10 +66,10 @@ class TestSampleGraphStore:
         ],
     )
     def test_entity_match(self, query, expected):
-        assert [c["id"] for c in asyncio.run(stores.SampleGraphStore().search(query, 10))] == expected
+        assert [c["id"] for c in asyncio.run(stores.SampleGraphStore().search(query, 10, []))] == expected
 
     def test_limit(self):
-        assert len(asyncio.run(stores.SampleGraphStore().search("재택근무 규정", 1))) == 1
+        assert len(asyncio.run(stores.SampleGraphStore().search("재택근무 규정", 1, []))) == 1
 
 
 FULL_A = {
@@ -79,6 +80,8 @@ FULL_A = {
     "version_id": "ver",
     "char_start": 0,
     "char_end": 1,
+    "status": "유효",
+    "allowed_group_ids": ["hr"],
 }
 FULL_B = {**FULL_A, "id": "b", "text": "B"}
 
@@ -148,19 +151,25 @@ class TestPostgresVectorStore:
     def test_search_query_and_params(self, connect):
         connection = FakeConnection(rows=[chunk("a")])
         connect(connection)
-        result = asyncio.run(stores.PostgresVectorStore("postgresql://db").search([0.5, 1.0], 3))
+        result = asyncio.run(stores.PostgresVectorStore("postgresql://db").search([0.5, 1.0], 3, ["hr"]))
         assert result == [chunk("a")]
         sql, params = connection.executed[0]
         assert "<=>" in sql and "LIMIT" in sql and sql.lstrip().startswith("SELECT")
-        assert params == ("[0.5,1.0]", 3)
+        assert params == (ACTIVE_STATUS, ["hr"], "[0.5,1.0]", 3)
         assert connect.url == "postgresql://db"
         assert connect.kwargs["connect_timeout"] == stores.CONNECT_TIMEOUT_SECONDS
         assert connect.kwargs["options"] == f"-c statement_timeout={stores.SEARCH_STATEMENT_TIMEOUT_MS}"
 
+    def test_no_groups_returns_nothing_without_connecting(self):
+        assert asyncio.run(stores.PostgresVectorStore("x").search([1.0], 1, [])) == []
+
+    def test_search_filters_status_and_groups(self):
+        assert "status = %s" in stores.VECTOR_SEARCH_SQL and "allowed_group_ids &&" in stores.VECTOR_SEARCH_SQL
+
     def test_search_never_writes(self, connect):
         connection = FakeConnection()
         connect(connection)
-        asyncio.run(stores.PostgresVectorStore("x").search([1.0], 1))
+        asyncio.run(stores.PostgresVectorStore("x").search([1.0], 1, ["hr"]))
         assert not any(word in connection.executed[0][0].upper() for word in ["INSERT", "DELETE", "UPDATE", "DROP"])
 
     def test_values_are_parameterized(self):
@@ -176,8 +185,8 @@ class TestPostgresVectorStore:
         sql, rows = connection.batches[0]
         assert sql.strip().startswith("INSERT")
         assert rows == [
-            ("a", "A", "s", "doc", "ver", 0, 1, "[0.1]"),
-            ("b", "B", "s", "doc", "ver", 0, 1, "[0.2]"),
+            ("a", "A", "s", "doc", "ver", 0, 1, "유효", ["hr"], "[0.1]"),
+            ("b", "B", "s", "doc", "ver", 0, 1, "유효", ["hr"], "[0.2]"),
         ]
         assert connection.exit_error is None
         assert connect.kwargs["options"] == f"-c statement_timeout={stores.WRITE_STATEMENT_TIMEOUT_MS}"

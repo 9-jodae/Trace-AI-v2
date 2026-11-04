@@ -3,6 +3,7 @@ import asyncio
 import pytest
 from conftest import chunk
 
+from app.core import config
 from app.core.errors import AiUnavailableError
 from app.retrieval import service
 
@@ -13,8 +14,8 @@ class FakeStore:
         self.error = error
         self.calls = []
 
-    async def search(self, query_or_embedding, limit):
-        self.calls.append((query_or_embedding, limit))
+    async def search(self, query_or_embedding, limit, allowed_groups):
+        self.calls.append((query_or_embedding, limit, allowed_groups))
         if self.error:
             raise self.error
         return self.result
@@ -26,6 +27,7 @@ def stores(monkeypatch):
         return [0.1, 0.2]
 
     def install(vector, graph):
+        monkeypatch.setenv("ALLOWED_GROUP_IDS", "all-staff, hr")
         monkeypatch.setattr(service, "get_stores", lambda: (vector, graph))
         monkeypatch.setattr(service, "embed_query", fake_embed)
 
@@ -36,8 +38,8 @@ def test_queries_both_stores(stores):
     vector, graph = FakeStore([chunk("a")]), FakeStore([chunk("b")])
     stores(vector, graph)
     asyncio.run(service.search("질문"))
-    assert vector.calls == [([0.1, 0.2], service.SOURCE_LIMIT)]
-    assert graph.calls == [("질문", service.SOURCE_LIMIT)]
+    assert vector.calls == [([0.1, 0.2], service.SOURCE_LIMIT, ["all-staff", "hr"])]
+    assert graph.calls == [("질문", service.SOURCE_LIMIT, ["all-staff", "hr"])]
 
 
 def test_stores_run_in_parallel(stores):
@@ -45,7 +47,7 @@ def test_stores_run_in_parallel(stores):
         event = None
         order = []
 
-        async def search(self, value, limit):
+        async def search(self, value, limit, allowed_groups):
             Waiting.order.append("start")
             await asyncio.sleep(0)
             Waiting.order.append("end")
@@ -85,6 +87,7 @@ def test_embedding_failure_counts_as_vector_failure(monkeypatch):
         raise RuntimeError("embedding")
 
     graph = FakeStore([chunk("b")])
+    monkeypatch.setenv("ALLOWED_GROUP_IDS", "all-staff")
     monkeypatch.setattr(service, "embed_query", fail)
     monkeypatch.setattr(service, "get_stores", lambda: (FakeStore(), graph))
     assert asyncio.run(service.search("질문"))["failed_sources"] == ["vector"]
@@ -124,3 +127,90 @@ def test_missing_stores_fail_before_paying_for_embedding(monkeypatch):
     monkeypatch.setattr(service, "embed_query", forbidden)
     with pytest.raises(AiUnavailableError):
         asyncio.run(service.search("질문"))
+
+
+class TestRealStoreSelection:
+    @pytest.fixture(autouse=True)
+    def clean_cache(self):
+        service._real_stores.cache_clear()
+        yield
+        service._real_stores.cache_clear()
+
+    @pytest.fixture
+    def neo4j(self, monkeypatch):
+        monkeypatch.setenv("NEO4J_URI", "bolt://localhost:7687")
+        monkeypatch.setenv("NEO4J_PASSWORD", "fake-password")
+
+    def test_qdrant_selected(self, monkeypatch, neo4j):
+        monkeypatch.setenv("VECTOR_STORE", "qdrant")
+        monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
+        vector, graph = service.get_stores()
+        assert type(vector).__name__ == "QdrantVectorStore" and type(graph).__name__ == "Neo4jGraphStore"
+
+    def test_pgvector_selected(self, monkeypatch, neo4j):
+        monkeypatch.setenv("VECTOR_STORE", "pgvector")
+        monkeypatch.setenv("DATABASE_URL", "postgresql://db")
+        assert type(service.get_stores()[0]).__name__ == "PostgresVectorStore"
+
+    def test_stores_are_reused(self, monkeypatch, neo4j):
+        monkeypatch.setenv("VECTOR_STORE", "qdrant")
+        monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
+        assert service.get_stores()[0] is service.get_stores()[0]
+
+    @pytest.mark.parametrize(
+        "kind, url_name",
+        [("", "QDRANT_URL"), ("unknown", "QDRANT_URL"), ("qdrant", "NONE"), ("pgvector", "NONE")],
+    )
+    def test_undecided_or_incomplete_vector_store_fails(self, monkeypatch, neo4j, kind, url_name):
+        monkeypatch.setenv("VECTOR_STORE", kind)
+        with pytest.raises(AiUnavailableError):
+            service.get_stores()
+
+    def test_missing_neo4j_fails(self, monkeypatch):
+        monkeypatch.setenv("VECTOR_STORE", "qdrant")
+        monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
+        with pytest.raises(AiUnavailableError):
+            service.get_stores()
+
+    def test_close_stores_closes_both(self, monkeypatch, neo4j):
+        closed = []
+
+        class Closable:
+            def __init__(self, name):
+                self.name = name
+
+            async def close(self):
+                closed.append(self.name)
+
+        monkeypatch.setenv("VECTOR_STORE", "qdrant")
+        monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
+        monkeypatch.setattr(service.QdrantVectorStore, "from_url", lambda url, collection: Closable("vector"))
+        monkeypatch.setattr(service.Neo4jGraphStore, "from_uri", lambda *args: Closable("graph"))
+        service.get_stores()
+        asyncio.run(service.close_stores())
+        assert sorted(closed) == ["graph", "vector"]
+
+    def test_close_without_stores_is_safe(self):
+        asyncio.run(service.close_stores())
+
+
+class TestPermissionFailsClosed:
+    def test_no_groups_returns_nothing_and_skips_embedding(self, monkeypatch):
+        async def forbidden(query):
+            raise AssertionError("임베딩을 호출하면 안 됩니다")
+
+        store = FakeStore([chunk("secret")])
+        monkeypatch.setattr(service, "get_stores", lambda: (store, store))
+        monkeypatch.setattr(service, "embed_query", forbidden)
+        assert asyncio.run(service.search("질문")) == {"chunks": [], "failed_sources": []}
+        assert store.calls == []
+
+    def test_production_ignores_group_setting(self, monkeypatch):
+        monkeypatch.setenv("APP_ENV", "production")
+        monkeypatch.setenv("ALLOWED_GROUP_IDS", "all-staff")
+        assert config.allowed_group_ids() == []
+
+    def test_local_group_setting_is_parsed(self, monkeypatch):
+        monkeypatch.setenv("ALLOWED_GROUP_IDS", " a , ,b ")
+        assert config.allowed_group_ids() == ["a", "b"]
+

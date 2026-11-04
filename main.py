@@ -10,6 +10,7 @@ from app.core import config
 from app.core.errors import register_error_handlers
 from app.jev.client import close_client as close_jev_client
 from app.playground.router import router as playground_router
+from app.retrieval.service import close_stores
 
 
 @asynccontextmanager
@@ -18,6 +19,7 @@ async def lifespan(app: FastAPI):
     app.state.conversations = ConversationStore(config.max_conversations(), config.conversation_ttl_seconds())
     yield
     await close_jev_client()
+    await close_stores()
 
 
 def configure_logging() -> None:
