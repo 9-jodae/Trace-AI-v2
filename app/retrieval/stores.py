@@ -71,19 +71,22 @@ class PostgresVectorStore:
             self._database_url, connect_timeout=CONNECT_TIMEOUT_SECONDS
         ) as connection:
             await connection.execute(DELETE_VERSION_SQL, (version_id,))
-            for chunk, embedding in pairs:
-                await connection.execute(
+            async with connection.cursor() as cursor:
+                await cursor.executemany(
                     INSERT_CHUNK_SQL,
-                    (
-                        chunk["id"],
-                        chunk["text"],
-                        chunk["source"],
-                        chunk["document_id"],
-                        chunk["version_id"],
-                        chunk["char_start"],
-                        chunk["char_end"],
-                        _to_vector(embedding),
-                    ),
+                    [
+                        (
+                            chunk["id"],
+                            chunk["text"],
+                            chunk["source"],
+                            chunk["document_id"],
+                            chunk["version_id"],
+                            chunk["char_start"],
+                            chunk["char_end"],
+                            _to_vector(embedding),
+                        )
+                        for chunk, embedding in pairs
+                    ],
                 )
 
 

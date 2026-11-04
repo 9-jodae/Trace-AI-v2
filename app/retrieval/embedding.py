@@ -1,11 +1,16 @@
 import asyncio
+import logging
 
 from langchain.embeddings import init_embeddings
 
 from app.core import config
-from app.core.errors import AiUnavailableError
+from app.core.errors import AiUnavailableError, describe_exception
+
+logger = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 20.0
+BATCH_SIZE = 64
+BATCH_ATTEMPTS = 2
 
 
 def _embedder():
@@ -35,6 +40,19 @@ async def embed_query(text: str) -> list[float]:
 
 
 async def embed_documents(texts: list[str]) -> list[list[float]]:
-    vectors = await asyncio.wait_for(_embedder().aembed_documents(texts), TIMEOUT_SECONDS)
-    _check_dimensions(vectors)
+    # 큰 문서가 하나의 시간 제한에 걸리지 않도록 배치마다 제한과 재시도를 둔다
+    embedder = _embedder()
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), BATCH_SIZE):
+        batch = texts[start : start + BATCH_SIZE]
+        for attempt in range(1, BATCH_ATTEMPTS + 1):
+            try:
+                batch_vectors = await asyncio.wait_for(embedder.aembed_documents(batch), TIMEOUT_SECONDS)
+                break
+            except Exception as exc:
+                if attempt == BATCH_ATTEMPTS:
+                    raise
+                logger.warning("Embedding batch retry: %s", describe_exception(exc))
+        _check_dimensions(batch_vectors)
+        vectors.extend(batch_vectors)
     return vectors

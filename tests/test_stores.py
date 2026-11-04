@@ -91,11 +91,28 @@ class FakeCursor:
         return self.rows
 
 
+class FakeBatchCursor:
+    def __init__(self, connection):
+        self.connection = connection
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+    async def executemany(self, sql, rows):
+        self.connection.batches.append((sql, rows))
+        if self.connection.fail_on and sql.strip().startswith(self.connection.fail_on):
+            raise RuntimeError("db error")
+
+
 class FakeConnection:
     def __init__(self, rows=None, fail_on=None):
         self.rows = rows or []
         self.fail_on = fail_on
         self.executed = []
+        self.batches = []
         self.exit_error = "not closed"
 
     async def __aenter__(self):
@@ -109,6 +126,9 @@ class FakeConnection:
         if self.fail_on and sql.strip().startswith(self.fail_on):
             raise RuntimeError("db error")
         return FakeCursor(self.rows)
+
+    def cursor(self):
+        return FakeBatchCursor(self)
 
 
 @pytest.fixture
@@ -145,14 +165,19 @@ class TestPostgresVectorStore:
     def test_values_are_parameterized(self):
         assert "%s" in stores.VECTOR_SEARCH_SQL and "{" not in stores.VECTOR_SEARCH_SQL
 
-    def test_replace_deletes_version_then_inserts(self, connect):
+    def test_replace_deletes_version_then_inserts_in_one_batch(self, connect):
         connection = FakeConnection()
         connect(connection)
         asyncio.run(stores.PostgresVectorStore("x").replace_version("ver", [FULL_A, FULL_B], [[0.1], [0.2]]))
-        verbs = [sql.split()[0] for sql, _ in connection.executed]
-        assert verbs == ["DELETE", "INSERT", "INSERT"]
+        assert [sql.split()[0] for sql, _ in connection.executed] == ["DELETE"]
         assert connection.executed[0][1] == ("ver",)
-        assert connection.executed[1][1] == ("a", "A", "s", "doc", "ver", 0, 1, "[0.1]")
+        assert len(connection.batches) == 1
+        sql, rows = connection.batches[0]
+        assert sql.strip().startswith("INSERT")
+        assert rows == [
+            ("a", "A", "s", "doc", "ver", 0, 1, "[0.1]"),
+            ("b", "B", "s", "doc", "ver", 0, 1, "[0.2]"),
+        ]
         assert connection.exit_error is None
 
     def test_replace_failure_reaches_transaction_exit(self, connect):
@@ -167,4 +192,4 @@ class TestPostgresVectorStore:
         connect(connection)
         with pytest.raises(ValueError):
             asyncio.run(stores.PostgresVectorStore("x").replace_version("ver", [FULL_A, FULL_B], [[0.1]]))
-        assert connection.executed == []
+        assert connection.executed == [] and connection.batches == []

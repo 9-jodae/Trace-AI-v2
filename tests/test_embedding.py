@@ -87,3 +87,71 @@ def test_one_wrong_vector_rejects_the_batch(monkeypatch):
     monkeypatch.setattr(embedding, "init_embeddings", lambda model, **kwargs: Mixed())
     with pytest.raises(AiUnavailableError):
         asyncio.run(embedding.embed_documents(["a", "b"]))
+
+
+class TestDocumentBatches:
+    @pytest.fixture
+    def embedder(self, monkeypatch):
+        class Recording:
+            def __init__(self):
+                self.batches = []
+                self.failures = []
+
+            async def aembed_documents(self, texts):
+                self.batches.append(list(texts))
+                if self.failures:
+                    failure = self.failures.pop(0)
+                    if failure == "hang":
+                        await asyncio.sleep(10)
+                    raise failure
+                return [[float(text)] + [0.0] * 1023 for text in texts]
+
+        recording = Recording()
+        monkeypatch.setattr(embedding, "init_embeddings", lambda model, **kwargs: recording)
+        return recording
+
+    @staticmethod
+    def texts(count):
+        return [str(index) for index in range(count)]
+
+    def test_splits_into_batches_and_keeps_order(self, embedder):
+        count = embedding.BATCH_SIZE * 2 + 3
+        vectors = asyncio.run(embedding.embed_documents(self.texts(count)))
+        assert [len(batch) for batch in embedder.batches] == [embedding.BATCH_SIZE, embedding.BATCH_SIZE, 3]
+        assert [vector[0] for vector in vectors] == [float(index) for index in range(count)]
+
+    def test_empty_input_makes_no_call(self, embedder):
+        assert asyncio.run(embedding.embed_documents([])) == []
+        assert embedder.batches == []
+
+    def test_failed_batch_is_retried_without_repeating_others(self, embedder):
+        embedder.failures = [RuntimeError("일시 오류")]
+        vectors = asyncio.run(embedding.embed_documents(self.texts(embedding.BATCH_SIZE + 1)))
+        assert len(vectors) == embedding.BATCH_SIZE + 1
+        assert [len(batch) for batch in embedder.batches] == [embedding.BATCH_SIZE, embedding.BATCH_SIZE, 1]
+
+    def test_repeated_failure_raises(self, embedder):
+        embedder.failures = [RuntimeError("a"), RuntimeError("b")]
+        with pytest.raises(RuntimeError, match="b"):
+            asyncio.run(embedding.embed_documents(self.texts(3)))
+        assert len(embedder.batches) == embedding.BATCH_ATTEMPTS
+
+    def test_timeout_applies_per_batch_and_is_retried(self, embedder, monkeypatch):
+        monkeypatch.setattr(embedding, "TIMEOUT_SECONDS", 0.01)
+        embedder.failures = ["hang"]
+        assert len(asyncio.run(embedding.embed_documents(self.texts(2)))) == 2
+        assert len(embedder.batches) == 2
+
+    def test_wrong_dimensions_are_not_retried(self, monkeypatch):
+        calls = []
+
+        class Wrong:
+            async def aembed_documents(self, texts):
+                calls.append(texts)
+                return [[0.1] for _ in texts]
+
+        monkeypatch.setattr(embedding, "init_embeddings", lambda model, **kwargs: Wrong())
+        with pytest.raises(AiUnavailableError):
+            asyncio.run(embedding.embed_documents(["a"]))
+        assert len(calls) == 1
+
