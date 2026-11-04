@@ -1,6 +1,8 @@
+import asyncio
 import time
 from collections import OrderedDict
 from typing import Callable
+from weakref import WeakValueDictionary
 
 from langchain_core.messages import AnyMessage
 from typing_extensions import TypedDict
@@ -30,6 +32,15 @@ class ConversationStore:
         self._ttl_seconds = ttl_seconds
         self._clock = clock
         self._items: OrderedDict[str, tuple[float, Conversation]] = OrderedDict()
+        # 쓰는 요청이 있는 동안만 잠금이 살아 있어 대화 수만큼 쌓이지 않는다
+        self._locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
+
+    def lock(self, thread_id: str) -> asyncio.Lock:
+        lock = self._locks.get(thread_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[thread_id] = lock
+        return lock
 
     def __len__(self) -> int:
         return len(self._items)

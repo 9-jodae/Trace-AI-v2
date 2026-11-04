@@ -13,12 +13,14 @@ router = APIRouter(prefix="/api/v1/agent", tags=["agent"], dependencies=[Depends
 async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     thread_id = body.thread_id or str(uuid4())
     conversations = request.app.state.conversations
-    saved = conversations.get(thread_id)
-    result = await request.app.state.agent.ainvoke(
-        {"messages": [*saved["messages"], HumanMessage(content=body.message)], "context": saved["context"]},
-    )
-    # 실패한 요청은 여기까지 오지 않으므로 대화 기록과 컨텍스트에 남지 않는다
-    conversations.save(thread_id, result["messages"], result["context"])
+    # 같은 대화의 요청을 차례로 처리해야 앞선 턴이 덮어써지지 않는다
+    async with conversations.lock(thread_id):
+        saved = conversations.get(thread_id)
+        result = await request.app.state.agent.ainvoke(
+            {"messages": [*saved["messages"], HumanMessage(content=body.message)], "context": saved["context"]},
+        )
+        # 실패한 요청은 여기까지 오지 않으므로 대화 기록과 컨텍스트에 남지 않는다
+        conversations.save(thread_id, result["messages"], result["context"])
     return ChatResponse(
         thread_id=thread_id,
         answer=result["messages"][-1].text,

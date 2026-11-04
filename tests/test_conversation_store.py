@@ -1,11 +1,18 @@
 """#7 완료 조건 중 메모리 상한."""
 
+import asyncio
+import gc
 import pickle
 
+import httpx
+import pytest
 from conftest import chunk
 from langchain_core.messages import HumanMessage
 
+import main
+from app.agent import graph
 from app.agent.store import MAX_MESSAGES, ConversationStore
+from app.core.errors import AiUnavailableError
 
 
 def message(text="q"):
@@ -79,3 +86,75 @@ def test_many_threads_stay_within_limit(client, ai, monkeypatch):
     for index in range(20):
         client.post("/api/v1/agent/chat", json={"message": "q", "threadId": f"t{index}"})
     assert len(store) == 5
+
+
+class TestConcurrentRequests:
+    @pytest.fixture
+    def app(self, ai):
+        application = main.create_app()
+        application.state.agent = graph.build_agent()
+        application.state.conversations = ConversationStore()
+        return application
+
+    @staticmethod
+    async def send(app, *requests):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await asyncio.gather(
+                *(
+                    client.post("/api/v1/agent/chat", json={"message": message, "threadId": thread})
+                    for message, thread in requests
+                )
+            )
+
+    def test_same_thread_keeps_every_turn(self, app, ai):
+        async def slow_generate(question, context, history):
+            ai.llm_calls.append(question)
+            await asyncio.sleep(0.01)
+            return f"답변: {question}"
+
+        graph.generate_answer = slow_generate
+        responses = asyncio.run(self.send(app, ("q1", "t"), ("q2", "t"), ("q3", "t")))
+        assert all(response.status_code == 200 for response in responses)
+        texts = [message.text for message in app.state.conversations.get("t")["messages"]]
+        assert [text for text in texts if text.startswith("q")] == ["q1", "q2", "q3"]
+
+    def test_same_thread_runs_one_at_a_time(self, app, ai):
+        running = {"now": 0, "max": 0}
+
+        async def slow_generate(question, context, history):
+            running["now"] += 1
+            running["max"] = max(running["max"], running["now"])
+            await asyncio.sleep(0.01)
+            running["now"] -= 1
+            return "답변"
+
+        graph.generate_answer = slow_generate
+        asyncio.run(self.send(app, ("q1", "t"), ("q2", "t")))
+        assert running["max"] == 1
+
+    def test_different_threads_run_together(self, app, ai):
+        running = {"now": 0, "max": 0}
+
+        async def slow_generate(question, context, history):
+            running["now"] += 1
+            running["max"] = max(running["max"], running["now"])
+            await asyncio.sleep(0.01)
+            running["now"] -= 1
+            return "답변"
+
+        graph.generate_answer = slow_generate
+        asyncio.run(self.send(app, ("q1", "a"), ("q2", "b")))
+        assert running["max"] == 2
+
+    def test_failure_releases_the_lock(self, app, ai):
+        ai.llm_error = AiUnavailableError("x")
+        assert asyncio.run(self.send(app, ("q1", "t")))[0].status_code == 503
+        ai.llm_error = None
+        assert asyncio.run(self.send(app, ("q2", "t")))[0].status_code == 200
+
+    def test_locks_do_not_accumulate(self, app, ai):
+        asyncio.run(self.send(app, *[("q", f"t{index}") for index in range(20)]))
+        gc.collect()
+        assert len(app.state.conversations._locks) == 0
+
