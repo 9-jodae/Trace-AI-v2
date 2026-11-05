@@ -173,6 +173,19 @@ def test_both_failures_raise(stores):
         asyncio.run(service.search("질문"))
 
 
+def test_postgres_failure_with_empty_graph_is_not_no_result(stores):
+    # 운영에서 ai_app 권한이 사라졌을 때 "찾지 못했습니다"로 보인 경우다
+    stores(FakeStore(error=RuntimeError("x"), fulltext_error=RuntimeError("z")), FakeStore())
+    with pytest.raises(AiUnavailableError):
+        asyncio.run(service.search("질문"))
+
+
+def test_postgres_failure_keeps_graph_chunks(stores):
+    stores(FakeStore(error=RuntimeError("x"), fulltext_error=RuntimeError("z")), FakeStore([chunk("b")]))
+    result = asyncio.run(service.search("질문"))
+    assert result["chunks"] and set(result["failed_sources"]) >= {"vector", "fulltext"}
+
+
 def test_empty_results_are_not_failures(stores):
     stores(FakeStore(), FakeStore())
     assert asyncio.run(service.search("질문")) == {"chunks": [], "failed_sources": []}
