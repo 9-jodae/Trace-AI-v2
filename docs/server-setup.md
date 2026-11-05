@@ -34,7 +34,9 @@ python3 -m venv .venv
 | `BEDROCK_REGION` | `ap-northeast-1` | Titan과 Haiku 호출 리전. 서버의 `AWS_REGION`은 `ap-southeast-1`이라 따로 지정 |
 | `LLM_MODEL` | `bedrock:global.anthropic.claude-sonnet-5-5` | Haiku 권한이 열리지 않아 Sonnet 5.5 사용. `global.` 프로필은 요청을 다른 리전에서 처리할 수 있음 |
 | `JEV_API_KEY` | TypeSafe 키 | 기존 컨텍스트 재사용 판단에 사용. 질문과 청크 본문이 TypeSafe로 전송됨 |
-| `NEO4J_URI` | 비움 | 중간 발표 범위 밖 |
+| `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` | `bolt://localhost:7687`, `neo4j`, 받은 값 | 문서 간 참조 검색. 비우면 벡터와 전문 검색만 사용 |
+| `S3_BUCKET`, `S3_PREFIX` | Spring `.env`와 같은 값 | 자동 적재의 원본 파일 위치 |
+| `SPRING_BASE_URL` | `http://localhost:18080` | 자동 적재 결과 콜백 주소 |
 
 `USE_SAMPLE_DATA`와 `ACCESS_*`, `EMBEDDING_PROXY_URL`은 넣지 않습니다. 운영 모드에서 샘플 설정은 시작 실패이고, 나머지는 무시합니다.
 
@@ -102,7 +104,7 @@ cd ~/docs199-AI && git pull && .venv/bin/pip install -r requirements.txt && sudo
 sudo systemctl stop docs199-ai
 ```
 
-문서를 다시 적재할 때는 서버의 JSON을 쓰고, 인스턴스 역할로 Titan을 직접 호출합니다.
+`NEO4J_URI`를 넣고 처음 실행할 때와 문서를 다시 적재할 때는 서버의 JSON을 쓰고, 인스턴스 역할로 Titan을 직접 호출합니다. 이 명령이 문서 간 참조도 Neo4j에 저장합니다. 엔티티는 `--extract-entities`를 붙일 때만 추출하고, 이때 청크 본문이 답변 모델로 전송됩니다.
 
 ```bash
 .venv/bin/python -m app.retrieval.indexing ~/exports/demo-documents.json

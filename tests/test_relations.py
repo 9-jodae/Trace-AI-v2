@@ -1,7 +1,14 @@
 import pytest
 
 from app.retrieval.chunking import chunk_document
-from app.retrieval.relations import document_names, hop_depth, name_in_query, normalize_name, resolve_references
+from app.retrieval.relations import (
+    document_names,
+    hop_depth,
+    name_in_query,
+    name_targets,
+    normalize_name,
+    resolve_references,
+)
 
 
 def document(doc_id, title, text):
@@ -44,30 +51,31 @@ def test_hop_depth(query, depth):
 
 class TestResolveReferences:
     def test_links_quoted_document_with_position(self):
-        [link] = resolve_references(TRAVEL, chunks(TRAVEL), [TRAVEL, EXPENSE])
+        [link] = resolve_references(TRAVEL, chunks(TRAVEL), name_targets([TRAVEL, EXPENSE]))
         assert link["source_document_id"] == "travel" and link["target_document_id"] == "expense"
         assert TRAVEL["text"][link["char_start"] : link["char_end"]] == link["quote"] == "《경비 결재 절차》"
         assert link["chunk_id"] == chunks(TRAVEL)[0]["id"]
 
     def test_wiki_link_is_supported(self):
         item = document("map", "지도", "[[경비 결재 절차]]를 본다.")
-        assert [x["target_document_id"] for x in resolve_references(item, chunks(item), [item, EXPENSE])] == ["expense"]
+        links = resolve_references(item, chunks(item), name_targets([item, EXPENSE]))
+        assert [link["target_document_id"] for link in links] == ["expense"]
 
     def test_unknown_name_is_ignored(self):
         item = document("a", "제목", "《없는 문서》를 본다.")
-        assert resolve_references(item, chunks(item), [item]) == []
+        assert resolve_references(item, chunks(item), name_targets([item])) == []
 
     def test_self_reference_is_ignored(self):
         item = document("a", "제목", "《제목》을 본다.")
-        assert resolve_references(item, chunks(item), [item]) == []
+        assert resolve_references(item, chunks(item), name_targets([item])) == []
 
     def test_ambiguous_name_is_ignored(self):
         other = document("other", "경비 결재 절차", "다른 문서")
-        assert resolve_references(TRAVEL, chunks(TRAVEL), [TRAVEL, EXPENSE, other]) == []
+        assert resolve_references(TRAVEL, chunks(TRAVEL), name_targets([TRAVEL, EXPENSE, other])) == []
 
     def test_repeated_reference_links_once(self):
         item = document("a", "제목", "《경비 결재 절차》와 《경비 결재 절차》")
-        assert len(resolve_references(item, chunks(item), [item, EXPENSE])) == 1
+        assert len(resolve_references(item, chunks(item), name_targets([item, EXPENSE]))) == 1
 
     def test_position_outside_chunks_is_ignored(self):
-        assert resolve_references(TRAVEL, [], [TRAVEL, EXPENSE]) == []
+        assert resolve_references(TRAVEL, [], name_targets([TRAVEL, EXPENSE])) == []

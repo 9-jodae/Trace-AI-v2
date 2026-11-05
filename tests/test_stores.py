@@ -480,3 +480,13 @@ class TestStaleVersion:
         connect(FakeConnection(rows=CURRENT))
         assert asyncio.run(stores.PostgresVectorStore("x").replace_version("ver", [FULL_A], [[0.1]])) is True
 
+
+class TestFindVersion:
+    def test_returns_document_of_version(self, connect):
+        connect(FakeConnection(rows=[{"document_id": "doc", "title": "규정"}]))
+        assert asyncio.run(stores.PostgresVectorStore("x").find_version("ver"))["title"] == "규정"
+
+    def test_unknown_version_is_none(self, connect):
+        connect(FakeConnection())
+        assert asyncio.run(stores.PostgresVectorStore("x").find_version("ver")) is None
+

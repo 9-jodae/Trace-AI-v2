@@ -141,6 +141,20 @@ def request_timeout_seconds() -> int:
     return _positive_int("REQUEST_TIMEOUT_SECONDS", DEFAULT_REQUEST_TIMEOUT_SECONDS)
 
 
+def s3_bucket() -> str | None:
+    return os.getenv("S3_BUCKET") or None
+
+
+def s3_prefix() -> str:
+    # 서버의 문서 내보내기 스크립트와 같은 기본값이다
+    prefix = os.getenv("S3_PREFIX", "uploads/").strip("/")
+    return f"{prefix}/" if prefix else ""
+
+
+def spring_base_url() -> str | None:
+    return os.getenv("SPRING_BASE_URL") or None
+
+
 def db_pool_max_size() -> int:
     return _positive_int("DB_POOL_MAX_SIZE", DEFAULT_DB_POOL_MAX_SIZE)
 

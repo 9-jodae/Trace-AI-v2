@@ -14,3 +14,5 @@ langchain-google-genai==4.4.2
 langchain-aws==1.9.1
 neo4j==6.4.1
 httpx==0.28.1
+boto3==1.43.123
+pypdf==6.21.4

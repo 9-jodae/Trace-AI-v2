@@ -7,7 +7,7 @@ from pathlib import Path
 from app.retrieval.chunking import chunk_document
 from app.retrieval.embedding import embed_documents
 from app.retrieval.entities import extract_mentions
-from app.retrieval.relations import document_names, resolve_references
+from app.retrieval.relations import document_names, name_targets, resolve_references
 from app.retrieval.schemas import Chunk, DocumentInput
 from app.retrieval.service import close_stores, get_real_stores
 
@@ -56,9 +56,10 @@ async def index_file(path: Path, extract_entities: bool = False) -> int:
         written = [(document, await index_document(document, extract_entities)) for document in documents]
         # 참조 대상 문서가 모두 저장된 뒤에 연결한다
         _, graph_store = get_real_stores()
+        targets = name_targets(documents)
         for document, chunks in written:
             if chunks:
-                links = resolve_references(document, chunks, documents)
+                links = resolve_references(document, chunks, targets)
                 await graph_store.replace_references(document["document_id"], links)
         return sum(len(chunks) for _, chunks in written)
     finally:

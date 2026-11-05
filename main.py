@@ -8,6 +8,8 @@ from app.agent.router import router as agent_router
 from app.agent.store import ConversationStore
 from app.core import config
 from app.core.errors import register_error_handlers
+from app.ingestion.router import router as ingestion_router
+from app.ingestion.service import IngestionService
 from app.jev.client import close_client as close_jev_client
 from app.playground.router import router as playground_router
 from app.retrieval.service import close_stores
@@ -17,7 +19,9 @@ from app.retrieval.service import close_stores
 async def lifespan(app: FastAPI):
     app.state.agent = build_agent()
     app.state.conversations = ConversationStore(config.max_conversations(), config.conversation_ttl_seconds())
+    app.state.ingestion = IngestionService()
     yield
+    await app.state.ingestion.close()
     await close_jev_client()
     await close_stores()
 
@@ -45,6 +49,7 @@ def create_app() -> FastAPI:
     )
     register_error_handlers(app)
     app.include_router(agent_router)
+    app.include_router(ingestion_router)
     if not production:
         app.include_router(playground_router)
     return app

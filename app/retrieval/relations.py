@@ -48,14 +48,18 @@ def _chunk_at(chunks: list[Chunk], position: int) -> Chunk | None:
     return next((chunk for chunk in chunks if chunk["char_start"] <= position < chunk["char_end"]), None)
 
 
+def name_targets(documents: list[DocumentInput]) -> dict[str, set[str]]:
+    targets: dict[str, set[str]] = {}
+    for document in documents:
+        for name in document_names(document):
+            targets.setdefault(name, set()).add(document["document_id"])
+    return targets
+
+
 def resolve_references(
-    document: DocumentInput, chunks: list[Chunk], documents: list[DocumentInput]
+    document: DocumentInput, chunks: list[Chunk], targets: dict[str, set[str]]
 ) -> list[DocumentLink]:
     # 본문에 명시된 문서명만 연결하고 이름이 겹치면 추측하지 않는다
-    targets: dict[str, set[str]] = {}
-    for candidate in documents:
-        for name in document_names(candidate):
-            targets.setdefault(name, set()).add(candidate["document_id"])
     links: dict[str, DocumentLink] = {}
     for match in REFERENCE_PATTERN.finditer(document["text"]):
         found = targets.get(normalize_name(match.group(1) or match.group(2)), set())

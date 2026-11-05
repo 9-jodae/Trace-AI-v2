@@ -60,6 +60,12 @@ POOL_WAIT_SECONDS = 5
 POOL_MIN_SIZE = 1
 SEARCH_STATEMENT_TIMEOUT_MS = 5_000
 WRITE_STATEMENT_TIMEOUT_MS = 60_000
+FIND_VERSION_SQL = """
+SELECT dv.document_id::text AS document_id, d.title AS title
+FROM document_versions dv
+JOIN documents d ON d.id = dv.document_id
+WHERE dv.id = %s::uuid
+"""
 IS_CURRENT_VERSION_SQL = """
 SELECT 1 AS current
 FROM document_versions dv
@@ -211,6 +217,10 @@ class PostgresVectorStore:
             rows = await self._read(FILTER_ACCESSIBLE_WITH_FILTERS_SQL, (*scope, *_filter_params(filters), chunk_ids))
         return {row["id"] for row in rows}
 
+    async def find_version(self, version_id: str) -> dict | None:
+        rows = await self._read(FIND_VERSION_SQL, (version_id,))
+        return rows[0] if rows else None
+
     async def is_current_version(self, version_id: str) -> bool:
         return bool(await self._read(IS_CURRENT_VERSION_SQL, (version_id,)))
 
@@ -261,6 +271,9 @@ class NoGraphStore:
 
     async def replace_references(self, document_id: str, links: list[dict]) -> None:
         pass
+
+    async def name_targets(self) -> dict[str, set[str]]:
+        return {}
 
 
 class SampleVectorStore:

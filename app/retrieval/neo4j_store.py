@@ -20,6 +20,7 @@ UNION ALL
 MATCH (e:Entity)
 RETURN 'entity' AS kind, e.entity_id AS id, [e.normalized_name] AS names
 """
+DOCUMENT_NAMES_CYPHER = "MATCH (d:Document) RETURN d.document_id AS id, d.names AS names"
 GRAPH_SEARCH_CYPHER = """
 CALL {
     MATCH (d:Document)-[:REFERENCES]-(:Document)-[:HAS_CHUNK]->(c:Chunk)
@@ -94,6 +95,14 @@ class Neo4jGraphStore:
             # run()의 첫 인자 이름이 query라서 키워드 인자로 넘기면 충돌한다
             result = await session.run(Query(statement, timeout=QUERY_TIMEOUT_SECONDS), parameters)
             return [dict(record) async for record in result]
+
+    async def name_targets(self) -> dict[str, set[str]]:
+        rows = await self._read(DOCUMENT_NAMES_CYPHER, {})
+        targets: dict[str, set[str]] = {}
+        for row in rows:
+            for name in row["names"] or []:
+                targets.setdefault(name, set()).add(row["id"])
+        return targets
 
     async def search(self, query: str, limit: int) -> list[dict]:
         normalized = normalize_name(query)

@@ -29,6 +29,8 @@
 
 권한 범위는 질문 요청의 `accessScope`로 받습니다(`departmentId`, `position`, `clearance`, `isAdmin`). 요청에 없으면 운영 환경에서는 어떤 문서도 근거로 돌려주지 않습니다. 로컬 시험에서는 요청에 없을 때 `ACCESS_DEPARTMENT_ID`, `ACCESS_POSITION`, `ACCESS_CLEARANCE`, `ACCESS_IS_ADMIN`으로 권한 범위를 지정합니다. `ACCESS_CLEARANCE`나 `ACCESS_IS_ADMIN=true`가 없으면 권한 범위가 없는 것으로 봅니다.
 
+새 문서는 Spring이 `POST /ingest`로 알리면 자동 적재합니다. 202로 바로 응답하고, S3에서 파일을 받아 MD·TXT·PDF 본문을 추출한 뒤 저장하고 `SPRING_BASE_URL`의 콜백으로 결과를 알립니다. 작업 상태는 메모리에 있어 재시작하면 사라지고, Spring이 같은 `jobId`를 다시 보내면 다시 처리합니다. OCR과 DOCX는 지원하지 않습니다. 새 문서를 가리키는 다른 문서의 참조는 그 문서를 다시 적재할 때 연결됩니다.
+
 JSON 문서는 `python -m app.retrieval.indexing <파일>`로 적재합니다. 현재 버전이 아닌 문서는 임베딩 전에 건너뛰고, 저장 직전에 다시 확인합니다. 그래프는 문서의 현재 버전 청크만 유지합니다. 파일 업로드와 파서는 아직 없습니다. `chunks.document_version_id`가 서버의 `document_versions.id`를 참조하므로 `version_id`는 서버에 있는 문서 버전의 UUID여야 합니다. `data/demo_documents.json`은 문자열 ID를 쓰고 있어 그대로는 팀 서버에 적재할 수 없습니다.
 
 대화는 메모리에 저장하며 대화당 최근 메시지 6개와 컨텍스트만 보관합니다. 기본값은 최대 1,000개 대화, 1시간이고 `MAX_CONVERSATIONS`, `CONVERSATION_TTL_SECONDS`로 바꿀 수 있습니다. 서버를 재시작하면 사라집니다.

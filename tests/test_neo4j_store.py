@@ -175,6 +175,12 @@ class TestReplaceReferences:
         assert [call[0] for call in driver.calls] == [neo4j_store.DELETE_REFERENCES_CYPHER]
 
 
+def test_name_targets_groups_documents_by_name():
+    rows = [{"id": "a", "names": ["규정"]}, {"id": "b", "names": ["규정", "절차"]}, {"id": "c", "names": None}]
+    driver = FakeDriver(rows=rows)
+    assert asyncio.run(Neo4jGraphStore(driver).name_targets()) == {"규정": {"a", "b"}, "절차": {"b"}}
+
+
 def test_close_closes_driver():
     driver = FakeDriver()
     asyncio.run(Neo4jGraphStore(driver).close())

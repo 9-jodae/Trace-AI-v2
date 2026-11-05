@@ -8,7 +8,7 @@ ROOT = Path(__file__).parent.parent
 
 class TestRoutes:
     def test_openapi_paths(self, client):
-        assert set(client.get("/openapi.json").json()["paths"]) == {"/api/v1/agent/chat"}
+        assert set(client.get("/openapi.json").json()["paths"]) == {"/api/v1/agent/chat", "/ingest"}
 
     def test_docs(self, client):
         assert client.get("/docs").status_code == 200
@@ -96,6 +96,8 @@ class TestProjectFiles:
             "langchain-text-splitters",
             "psycopg",
             "psycopg-pool",
+            "boto3",
+            "pypdf",
             "neo4j",
             "langchain-aws",
             "typesafe-sdk",
