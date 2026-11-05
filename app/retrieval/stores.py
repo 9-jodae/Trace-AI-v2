@@ -46,6 +46,41 @@ SELECT c.id::text AS id
 FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
 WHERE c.id = ANY(%s::uuid[])
 """
+FETCH_ACCESSIBLE_SQL = """
+WITH requested AS (
+    SELECT chunk_id, ordinality
+    FROM unnest(%s::uuid[]) WITH ORDINALITY AS ids(chunk_id, ordinality)
+)
+SELECT c.id::text AS id, c.content AS text, d.title AS source, dv.document_id::text AS document_id,
+       c.document_version_id::text AS version_id, c.char_start, c.char_end
+FROM requested r
+JOIN accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
+  ON c.id = r.chunk_id
+JOIN document_versions dv ON dv.id = c.document_version_id
+JOIN documents d ON d.id = dv.document_id
+ORDER BY r.ordinality
+"""
+FETCH_ACCESSIBLE_WITH_VECTOR_SQL = """
+WITH requested AS (
+    SELECT chunk_id, ordinality
+    FROM unnest(%s::uuid[]) WITH ORDINALITY AS ids(chunk_id, ordinality)
+)
+SELECT c.id::text AS id, c.content AS text, d.title AS source, dv.document_id::text AS document_id,
+       c.document_version_id::text AS version_id, c.char_start, c.char_end
+FROM requested r
+JOIN accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
+  ON c.id = r.chunk_id
+JOIN document_versions dv ON dv.id = c.document_version_id
+JOIN documents d ON d.id = dv.document_id
+WHERE c.embedding IS NOT NULL AND c.embedding <=> %s::vector <= %s
+ORDER BY r.ordinality
+"""
+ACCESSIBLE_DOCUMENT_IDS_SQL = """
+SELECT DISTINCT dv.document_id::text AS id
+FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
+JOIN document_versions dv ON dv.id = c.document_version_id
+WHERE dv.document_id = ANY(%s::uuid[])
+"""
 SET_STATEMENT_TIMEOUT_SQL = "SELECT set_config('statement_timeout', %s, true)"
 CONNECT_TIMEOUT_SECONDS = 5
 # 연결이 모두 사용 중이면 이 시간까지 기다린 뒤 실패한다
@@ -98,10 +133,30 @@ class VectorStore(Protocol):
         self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
     ) -> set[str]: ...
 
+    async def fetch_accessible(
+        self,
+        chunk_ids: list[str],
+        scope: AccessScope | None,
+        filters: SearchFilters | None = None,
+        embedding: list[float] | None = None,
+    ) -> list[Chunk]: ...
+
+    async def accessible_document_ids(
+        self, document_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> set[str]: ...
+
 
 class GraphStore(Protocol):
-    # 그래프에는 권한 정보가 없으므로 결과는 VectorStore.filter_accessible을 거쳐야 내보낼 수 있다
-    async def search(self, query: str, limit: int) -> list[Chunk]: ...
+    # 그래프에는 본문과 권한을 두지 않는다. 반환한 ID를 VectorStore.fetch_accessible로 읽는다
+    async def seed_documents(self, query: str) -> list[str]: ...
+
+    async def search_from_documents(self, document_ids: list[str], limit: int) -> list[str]: ...
+
+    async def list_document_catalog(self) -> list[dict[str, str]]: ...
+
+    async def replace_document(self, document_id: str, source: str, names: list[str], chunks: list[Chunk]) -> None: ...
+
+    async def replace_references(self, document_id: str, links: list[dict[str, str]]) -> None: ...
 
 
 def _to_vector(embedding: list[float]) -> str:
@@ -197,6 +252,32 @@ class PostgresVectorStore:
             rows = await self._read(FILTER_ACCESSIBLE_WITH_FILTERS_SQL, (*scope, *_filter_params(filters), chunk_ids))
         return {row["id"] for row in rows}
 
+    async def fetch_accessible(
+        self,
+        chunk_ids: list[str],
+        scope: AccessScope | None,
+        filters: SearchFilters | None = None,
+        embedding: list[float] | None = None,
+    ) -> list[Chunk]:
+        if scope is None or not chunk_ids:
+            return []
+        if embedding is not None:
+            vector = _to_vector(embedding)
+            return await self._read(
+                FETCH_ACCESSIBLE_WITH_VECTOR_SQL,
+                (chunk_ids, *scope, *_filter_params(filters), vector, config.vector_max_cosine_distance()),
+            )
+        rows = await self._read(FETCH_ACCESSIBLE_SQL, (chunk_ids, *scope, *_filter_params(filters)))
+        return rows
+
+    async def accessible_document_ids(
+        self, document_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> set[str]:
+        if scope is None or not document_ids:
+            return set()
+        rows = await self._read(ACCESSIBLE_DOCUMENT_IDS_SQL, (*scope, *_filter_params(filters), document_ids))
+        return {row["id"] for row in rows}
+
     async def is_current_version(self, version_id: str) -> bool:
         return bool(await self._read(IS_CURRENT_VERSION_SQL, (version_id,)))
 
@@ -237,10 +318,22 @@ class NoGraphStore:
     async def close(self) -> None:
         pass
 
-    async def search(self, query: str, limit: int) -> list[Chunk]:
+    async def seed_documents(self, query: str) -> list[str]:
         return []
 
-    async def replace_version(self, version_id: str, document_id: str, document: dict, chunks: list[Chunk]) -> None:
+    async def search_from_documents(self, document_ids: list[str], limit: int) -> list[str]:
+        return []
+
+    async def search(self, query: str, limit: int) -> list[str]:
+        return []
+
+    async def list_document_catalog(self) -> list[dict[str, str]]:
+        return []
+
+    async def replace_document(self, document_id: str, source: str, names: list[str], chunks: list[Chunk]) -> None:
+        pass
+
+    async def replace_references(self, document_id: str, links: list[dict[str, str]]) -> None:
         pass
 
 
@@ -268,14 +361,50 @@ class SampleVectorStore:
     ) -> set[str]:
         return set(chunk_ids)
 
+    async def fetch_accessible(
+        self,
+        chunk_ids: list[str],
+        scope: AccessScope | None,
+        filters: SearchFilters | None = None,
+        embedding: list[float] | None = None,
+    ) -> list[Chunk]:
+        by_id = {chunk["id"]: chunk for chunk in SAMPLE_CHUNKS}
+        rows = [by_id[chunk_id] for chunk_id in chunk_ids if chunk_id in by_id]
+        if embedding is None:
+            return rows
+        if self._embeddings is None:
+            self._embeddings = await embed_documents([chunk["text"] for chunk in SAMPLE_CHUNKS])
+        embeddings = dict(zip((chunk["id"] for chunk in SAMPLE_CHUNKS), self._embeddings, strict=True))
+        return [
+            chunk
+            for chunk in rows
+            if 1 - _cosine(embedding, embeddings[chunk["id"]]) <= config.vector_max_cosine_distance()
+        ]
+
+    async def accessible_document_ids(
+        self, document_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> set[str]:
+        # 샘플 저장소에는 권한 메타데이터가 없으며 USE_SAMPLE_DATA가 명시된 로컬 데모에서만 사용한다.
+        return set(document_ids)
+
 
 class SampleGraphStore:
-    async def search(self, query: str, limit: int) -> list[Chunk]:
+    async def seed_documents(self, query: str) -> list[str]:
         normalized = "".join(query.split()).casefold()
-        linked = [
-            chunk_id
-            for name, chunk_ids in SAMPLE_ENTITIES.items()
-            if "".join(name.split()).casefold() in normalized
-            for chunk_id in chunk_ids
-        ]
-        return [chunk for chunk in SAMPLE_CHUNKS if chunk["id"] in linked][:limit]
+        return [name for name in SAMPLE_ENTITIES if "".join(name.split()).casefold() in normalized]
+
+    async def search_from_documents(self, document_ids: list[str], limit: int) -> list[str]:
+        linked = [chunk_id for name in document_ids for chunk_id in SAMPLE_ENTITIES.get(name, [])]
+        return linked[:limit]
+
+    async def search(self, query: str, limit: int) -> list[str]:
+        return await self.search_from_documents(await self.seed_documents(query), limit)
+
+    async def list_document_catalog(self) -> list[dict[str, str]]:
+        return []
+
+    async def replace_document(self, document_id: str, source: str, names: list[str], chunks: list[Chunk]) -> None:
+        pass
+
+    async def replace_references(self, document_id: str, links: list[dict[str, str]]) -> None:
+        pass

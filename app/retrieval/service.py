@@ -91,15 +91,31 @@ async def search(
         # 권한 범위를 모르면 어떤 문서도 근거로 내보내지 않는다. 임베딩 비용도 쓰지 않는다
         logger.warning("Search skipped: no access scope")
         return {"chunks": [], "failed_sources": []}
+    # 하나의 질문 벡터를 벡터 검색과 그래프 후보 관련도 검증에 공유한다.
+    query_embedding = asyncio.create_task(embed_query(query))
 
     async def search_vector() -> list[Chunk]:
-        return await vector_store.search(await embed_query(query), SOURCE_LIMIT, scope, filters)
+        return await vector_store.search(await query_embedding, SOURCE_LIMIT, scope, filters)
 
     async def search_graph() -> list[Chunk]:
-        # 권한을 확인하지 못하면 그래프 결과도 내보내지 않도록 실패로 처리한다
-        candidates = await graph_store.search(query, GRAPH_CANDIDATE_LIMIT)
-        accessible = await vector_store.filter_accessible([chunk["id"] for chunk in candidates], scope, filters)
-        return [chunk for chunk in candidates if chunk["id"] in accessible][:SOURCE_LIMIT]
+        # Neo4j 제목 매칭 결과를 먼저 PostgreSQL에서 허용된 현재 문서인지 확인한 뒤에만 관계를 확장한다.
+        seed_ids = await graph_store.seed_documents(query)
+        if not seed_ids:
+            return []
+        allowed_seed_ids = await vector_store.accessible_document_ids(seed_ids, scope, filters)
+        if not allowed_seed_ids:
+            return []
+        candidate_ids = await graph_store.search_from_documents(
+            [document_id for document_id in seed_ids if document_id in allowed_seed_ids], GRAPH_CANDIDATE_LIMIT
+        )
+        try:
+            embedding = await query_embedding
+        except Exception:
+            # 질문 임베딩 장애에도 명시적 문서 관계 검색은 계속 제공한다.
+            embedding = None
+        return await vector_store.fetch_accessible(
+            candidate_ids[:GRAPH_CANDIDATE_LIMIT], scope, filters, embedding
+        )
 
     names = ["vector", "graph"]
     results = await asyncio.gather(search_vector(), search_graph(), return_exceptions=True)

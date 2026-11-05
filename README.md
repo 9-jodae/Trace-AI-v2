@@ -4,6 +4,8 @@
 
 Python AI 서버는 FastAPI와 LangGraph로 검색과 답변 생성을 처리합니다.
 
+검색은 PostgreSQL 벡터·전문 검색과 선택적 Neo4j 문서 참조 그래프를 함께 사용합니다. 그래프는 청크 ID만 반환하고 본문은 PostgreSQL 권한 함수로 다시 읽습니다. 그래프 검색 평가와 활성화 기준은 [문서 참조 그래프 검색 평가](docs/reference-graph-evaluation.md)에 정리했습니다.
+
 이 저장소는 `9-jodae/docs199-AI`에서 옮겨 왔습니다. 자세한 내용은 [저장소 이전 기록](docs/repo-migration.md)을 참고하세요.
 
 ## 로컬 실행
