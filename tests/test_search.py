@@ -34,7 +34,9 @@ class FakeStore:
             raise self.error
         if isinstance(query_or_embedding, str):
             return [item["id"] if isinstance(item, dict) else item for item in self.result]
-        return self.result
+        if self.accessible is None:
+            return self.result
+        return [item for item in self.result if item.get("id") in self.accessible]
 
     async def fulltext(self, query, limit, scope, filters=None):
         self.fulltext_calls.append((query, limit, scope, filters))
@@ -50,6 +52,8 @@ class FakeStore:
 
     async def search_from_documents(self, document_ids, limit):
         self.expansion_calls.append((document_ids, limit))
+        if self.error:
+            raise self.error
         return [item["id"] if isinstance(item, dict) else item for item in self.result[:limit]]
 
     async def list_document_catalog(self):
@@ -57,9 +61,11 @@ class FakeStore:
 
     async def accessible_document_ids(self, document_ids, scope, filters=None):
         self.document_calls.append((document_ids, scope, filters))
+        if self.filter_error:
+            raise self.filter_error
         if scope is None or self.accessible == set():
             return set()
-        return set(document_ids)
+        return set(document_ids) if self.accessible is None else set(document_ids) & self.accessible
 
     async def filter_accessible(self, chunk_ids, scope, filters=None):
         self.filter_calls.append((chunk_ids, scope, filters))
@@ -96,7 +102,8 @@ def test_queries_both_stores(stores):
     stores(vector, graph)
     asyncio.run(service.search("질문"))
     assert vector.calls == [([0.1, 0.2], service.SOURCE_LIMIT, SCOPE, None)]
-    assert graph.calls == [("질문", service.GRAPH_CANDIDATE_LIMIT)]
+    assert vector.fulltext_calls == [("질문", service.SOURCE_LIMIT, SCOPE, None)]
+    assert graph.expansion_calls == [(["a"], service.GRAPH_CANDIDATE_LIMIT)]
 
 
 def test_stores_run_in_parallel(stores):
@@ -111,6 +118,12 @@ def test_stores_run_in_parallel(stores):
             return []
 
         async def search(self, query_or_embedding, limit, *scope):
+            Waiting.order.append("start")
+            await asyncio.sleep(0)
+            Waiting.order.append("end")
+            return []
+
+        async def fulltext(self, query, limit, scope, filters=None):
             Waiting.order.append("start")
             await asyncio.sleep(0)
             Waiting.order.append("end")
@@ -134,7 +147,7 @@ def test_context_limit(stores):
 
 
 def test_vector_failure_keeps_graph(stores):
-    stores(FakeStore(error=RuntimeError("x")), FakeStore([chunk("b")]))
+    stores(FakeStore(error=RuntimeError("x"), fulltext=[chunk("b")]), FakeStore([chunk("b")]))
     result = asyncio.run(service.search("질문"))
     assert result == {"chunks": [chunk("b")], "failed_sources": ["vector"]}
 
@@ -269,8 +282,8 @@ class TestRealStoreSelection:
         asyncio.run(service.close_stores())
 
 
-class TestFulltextFallback:
-    def test_runs_when_graph_has_few_results(self, stores):
+class TestHybridGraphSeeds:
+    def test_fulltext_runs_alongside_vector_to_seed_graph(self, stores):
         vector = FakeStore([chunk("a")], fulltext=[chunk("t")])
         stores(vector, FakeStore([chunk("b")]))
         filters = SearchFilters(extensions=["pdf"])
@@ -278,11 +291,11 @@ class TestFulltextFallback:
         assert vector.fulltext_calls == [("질문", service.SOURCE_LIMIT, SCOPE, filters)]
         assert {c["id"] for c in result["chunks"]} == {"a", "b", "t"}
 
-    def test_skipped_when_graph_has_enough_results(self, stores):
-        vector = FakeStore(fulltext=[chunk("t")])
-        stores(vector, FakeStore([chunk(str(i)) for i in range(service.FULLTEXT_FALLBACK_BELOW)]))
+    def test_fulltext_is_not_skipped_when_graph_has_many_results(self, stores):
+        vector = FakeStore([chunk("seed")], fulltext=[chunk("t")])
+        stores(vector, FakeStore([chunk(str(i)) for i in range(service.SOURCE_LIMIT)]))
         asyncio.run(service.search("질문"))
-        assert vector.fulltext_calls == []
+        assert vector.fulltext_calls == [("질문", service.SOURCE_LIMIT, SCOPE, None)]
 
     def test_results_in_both_rank_higher(self, stores):
         stores(FakeStore([chunk("a"), chunk("b")], fulltext=[chunk("b"), chunk("c")]), FakeStore())
@@ -306,7 +319,7 @@ class TestFulltextFallback:
 
 class TestGraphPermissionFilter:
     def test_inaccessible_graph_results_are_removed(self, stores):
-        vector = FakeStore(accessible={"b"})
+        vector = FakeStore([chunk("b")], accessible={"b"})
         graph = FakeStore([chunk("secret"), chunk("b")])
         stores(vector, graph)
         result = asyncio.run(service.search("질문"))
@@ -314,7 +327,7 @@ class TestGraphPermissionFilter:
         assert vector.filter_calls == [(["secret", "b"], SCOPE, None)]
 
     def test_filters_reach_vector_and_graph_check(self, stores):
-        vector = FakeStore(accessible={"b"})
+        vector = FakeStore([chunk("b")], accessible={"b"})
         stores(vector, FakeStore([chunk("x"), chunk("b")]))
         filters = SearchFilters(extensions=["pdf"])
         asyncio.run(service.search("질문", filters))
@@ -326,13 +339,13 @@ class TestGraphPermissionFilter:
         result = asyncio.run(service.search("질문"))
         assert result == {"chunks": [chunk("a")], "failed_sources": ["graph"]}
 
-    def test_inaccessible_seed_is_rejected_before_graph_expansion(self, stores):
-        vector, graph = FakeStore(accessible=set()), FakeStore([chunk("secret")])
+    def test_inaccessible_search_result_never_reaches_graph_expansion(self, stores):
+        vector, graph = FakeStore([chunk("doc")], accessible=set()), FakeStore([chunk("secret")])
         stores(vector, graph)
         result = asyncio.run(service.search("질문"))
         assert graph.expansion_calls == []
         assert result["chunks"] == []
-        assert vector.document_calls == [(["doc"], SCOPE, None)]
+        assert vector.document_calls == []
 
     def test_postgres_down_exposes_nothing(self, stores):
         down = RuntimeError("db")
@@ -341,7 +354,9 @@ class TestGraphPermissionFilter:
             asyncio.run(service.search("질문"))
 
     def test_filtered_results_keep_limit(self, stores):
-        stores(FakeStore(), FakeStore([chunk(str(i)) for i in range(service.GRAPH_CANDIDATE_LIMIT)]))
+        seeds = [chunk(f"seed-{i}") for i in range(service.GRAPH_CANDIDATE_LIMIT)]
+        graph_chunks = [chunk(str(i)) for i in range(service.GRAPH_CANDIDATE_LIMIT)]
+        stores(FakeStore(seeds), FakeStore(graph_chunks))
         assert len(asyncio.run(service.search("질문"))["chunks"]) == service.CONTEXT_LIMIT
 
 
@@ -357,7 +372,7 @@ class TestFilterAccessibleContext:
 
 class TestRequestScope:
     def test_request_scope_reaches_vector_and_graph_check(self, stores):
-        vector, graph = FakeStore(), FakeStore([chunk("b")])
+        vector, graph = FakeStore([chunk("a")]), FakeStore([chunk("b")])
         stores(vector, graph)
         scope = AccessScope("요청", "STAFF", "PUBLIC", False)
         asyncio.run(service.search("질문", None, scope))

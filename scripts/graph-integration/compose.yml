@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: docs199_graph_test
+      POSTGRES_USER: graph_test
+      POSTGRES_PASSWORD: graph_test_only_password
+    ports:
+      - "127.0.0.1:15432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U graph_test -d docs199_graph_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  neo4j:
+    image: neo4j:5.26.32-community
+    environment:
+      NEO4J_AUTH: neo4j/graph_test_only_password
+      NEO4J_server_memory_heap_initial__size: 128m
+      NEO4J_server_memory_heap_max__size: 256m
+    ports:
+      - "127.0.0.1:17687:7687"
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p graph_test_only_password 'RETURN 1' >/dev/null 2>&1"]
+      interval: 3s
+      timeout: 3s
+      retries: 40

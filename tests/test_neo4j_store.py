@@ -6,7 +6,7 @@ import inspect
 from neo4j import AsyncManagedTransaction, AsyncSession
 
 from app.retrieval import neo4j_store
-from app.retrieval.neo4j_store import Neo4jGraphStore, name_in_query
+from app.retrieval.neo4j_store import Neo4jGraphStore
 
 
 class FakeResult:
@@ -38,8 +38,6 @@ class FakeSession:
         call_params = {**(parameters or {}), **params}
         self.driver.calls.append((query, call_params))
         query_text = getattr(query, "text", query)
-        if query_text == neo4j_store.SEEDS_CYPHER:
-            return FakeResult(self.driver.seeds)
         if query_text == neo4j_store.REFERENCE_SEARCH_CYPHER:
             return FakeResult(self.driver.results)
         return FakeResult()
@@ -65,54 +63,34 @@ class FakeDriver:
         self.closed = True
 
 
-def test_name_match_requires_complete_ascii_word_but_allows_korean_particles():
-    assert name_in_query("API", "api 문서")
-    assert not name_in_query("API", "Rapid API-like")
-    assert name_in_query("출장 신청 안내", "출장 신청 안내 관련 문서")
-    assert name_in_query("출장 신청 안내", "출장신청안내 관련 문서")
-
-
-def test_search_matches_known_names_then_returns_only_chunk_ids():
-    driver = FakeDriver(
-        seeds=[
-            {"id": "doc-a", "source": "출장 신청 안내"},
-            {"id": "doc-short", "source": "IT"},
-        ],
-        results=[{"id": "chunk-1"}, {"id": "chunk-2"}],
-    )
+def test_search_expands_supplied_hybrid_seed_documents_to_chunk_ids():
+    driver = FakeDriver(results=[{"id": "chunk-1"}, {"id": "chunk-2"}])
     store = Neo4jGraphStore(driver, "db")
-    seeds = asyncio.run(store.seed_documents("출장 신청 안내 관련 경비"))
-    result = asyncio.run(store.search_from_documents(seeds, 50))
+    result = asyncio.run(store.search_from_documents(["doc-keyword", "doc-vector"], 50))
     assert result == ["chunk-1", "chunk-2"]
-    assert len(driver.calls) == 2
-    query, params = driver.calls[1]
+    assert len(driver.calls) == 1
+    query, params = driver.calls[0]
     assert query.text == neo4j_store.REFERENCE_SEARCH_CYPHER
     assert query.timeout == neo4j_store.QUERY_TIMEOUT_SECONDS
     assert params == {
-        "documents": ["doc-a"],
+        "documents": ["doc-keyword", "doc-vector"],
         "limit": 50,
         "per_document_limit": neo4j_store.CHUNKS_PER_DOCUMENT_LIMIT,
     }
     assert driver.database == "db"
 
 
-def test_unmatched_question_does_not_run_graph_traversal():
-    driver = FakeDriver(seeds=[{"id": "doc-a", "source": "출장 신청 안내"}])
-    assert asyncio.run(Neo4jGraphStore(driver).seed_documents("일반적인 질문")) == []
-    assert len(driver.calls) == 1
-
-
 def test_query_text_is_not_interpolated_into_cypher():
-    driver = FakeDriver(seeds=[{"id": "doc-a", "source": "출장 안내"}], results=[])
+    driver = FakeDriver(results=[])
     store = Neo4jGraphStore(driver)
-    seeds = asyncio.run(store.seed_documents("출장 안내\") DETACH DELETE"))
-    asyncio.run(store.search_from_documents(seeds, 10))
+    asyncio.run(store.search_from_documents(["doc-a\") DETACH DELETE"], 10))
     assert all("DETACH DELETE" not in str(query) for query, _ in driver.calls)
-    assert driver.calls[-1][1]["documents"] == ["doc-a"]
+    assert driver.calls[-1][1]["documents"] == ["doc-a\") DETACH DELETE"]
 
 
 def test_reference_traversal_is_one_hop_bounded_and_returns_no_content():
     query = neo4j_store.REFERENCE_SEARCH_CYPHER
+    assert query.strip().startswith("CALL () {")
     assert "REFERENCES" in query and "LIMIT $limit" in query
     assert "2.." not in query and "c.text" not in query and "quote" not in query
     assert "collect(id)[0..$per_document_limit]" in query
