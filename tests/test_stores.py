@@ -88,12 +88,18 @@ FULL_B = {**FULL_A, "id": "b", "text": "B", "chunk_index": 1, "content_hash": "h
 SCOPE = AccessScope("dept", "STAFF", "INTERNAL", False)
 
 
+CURRENT = [{"current": 1}]
+
+
 class FakeCursor:
     def __init__(self, rows):
         self.rows = rows
 
     async def fetchall(self):
         return self.rows
+
+    async def fetchone(self):
+        return self.rows[0] if self.rows else None
 
 
 class FakeBatchCursor:
@@ -268,11 +274,13 @@ class TestPostgresVectorStore:
         assert asyncio.run(stores.PostgresVectorStore("x").filter_accessible(ids, scope)) == set()
 
     def test_replace_deletes_version_then_inserts_in_one_batch(self, connect):
-        connection = FakeConnection()
+        connection = FakeConnection(rows=CURRENT)
         connect(connection)
         asyncio.run(stores.PostgresVectorStore("x").replace_version("ver", [FULL_A, FULL_B], [[0.1], [0.2]]))
-        assert [sql.split()[0] for sql, _ in data_statements(connection)] == ["DELETE"]
-        assert data_statements(connection)[0][1] == ("ver",)
+        statements = data_statements(connection)
+        assert statements[0] == (stores.IS_CURRENT_VERSION_SQL, ("ver",))
+        assert [sql.split()[0] for sql, _ in statements[1:]] == ["DELETE"]
+        assert statements[1][1] == ("ver",)
         assert len(connection.batches) == 1
         sql, rows = connection.batches[0]
         assert sql.strip().startswith("INSERT")
@@ -280,12 +288,12 @@ class TestPostgresVectorStore:
             ("a", "ver", 0, "A", 0, 1, "hash-a", "[0.1]"),
             ("b", "ver", 1, "B", 0, 1, "hash-b", "[0.2]"),
         ]
-        assert "document_version_id = %s" in data_statements(connection)[0][0]
+        assert "document_version_id = %s" in statements[1][0]
         assert connection.exit_error is None
         assert connection.executed[0] == (stores.SET_STATEMENT_TIMEOUT_SQL, (str(stores.WRITE_STATEMENT_TIMEOUT_MS),))
 
     def test_replace_failure_reaches_transaction_exit(self, connect):
-        connection = FakeConnection(fail_on="INSERT")
+        connection = FakeConnection(rows=CURRENT, fail_on="INSERT")
         connect(connection)
         with pytest.raises(RuntimeError):
             asyncio.run(stores.PostgresVectorStore("x").replace_version("ver", [FULL_A], [[0.1]]))
@@ -425,3 +433,28 @@ class TestFulltext:
 
     def test_sample_store_returns_nothing(self):
         assert asyncio.run(stores.SampleVectorStore().fulltext("재택근무", 3, None)) == []
+
+
+class TestStaleVersion:
+    def test_is_current_version(self, connect):
+        connect(FakeConnection(rows=CURRENT))
+        assert asyncio.run(stores.PostgresVectorStore("x").is_current_version("ver")) is True
+        connect(FakeConnection())
+        assert asyncio.run(stores.PostgresVectorStore("x").is_current_version("ver")) is False
+
+    def test_query_checks_current_version_and_deletion(self):
+        assert "d.current_version" in stores.IS_CURRENT_VERSION_SQL
+        assert "d.deleted_at IS NULL" in stores.IS_CURRENT_VERSION_SQL
+
+    def test_stale_write_changes_nothing(self, connect):
+        connection = FakeConnection()
+        connect(connection)
+        store = stores.PostgresVectorStore("x")
+        assert asyncio.run(store.replace_version("old", [FULL_A], [[0.1]])) is False
+        assert [sql for sql, _ in data_statements(connection)] == [stores.IS_CURRENT_VERSION_SQL]
+        assert connection.batches == []
+
+    def test_current_write_returns_true(self, connect):
+        connect(FakeConnection(rows=CURRENT))
+        assert asyncio.run(stores.PostgresVectorStore("x").replace_version("ver", [FULL_A], [[0.1]])) is True
+
