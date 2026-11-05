@@ -27,7 +27,11 @@ def load_documents(path: Path) -> list[DocumentInput]:
     ]
 
 
-async def index_document(document: DocumentInput) -> list[Chunk]:
+async def index_document(
+    document: DocumentInput,
+    reference_catalog: list[DocumentInput] | None = None,
+    update_references: bool = True,
+) -> list[Chunk]:
     chunks = chunk_document(document["document_id"], document["version_id"], document["text"], document["source"])
     if not chunks:
         return []
@@ -43,21 +47,63 @@ async def index_document(document: DocumentInput) -> list[Chunk]:
     await graph_store.replace_document(
         document["document_id"], document["source"], document_names(document), chunks
     )
+    if update_references:
+        catalog = reference_catalog or await _reference_catalog(graph_store)
+        await _replace_document_references(graph_store, document, chunks, catalog)
     return chunks
+
+
+async def _reference_catalog(graph_store, documents: list[DocumentInput] = ()) -> list[DocumentInput]:
+    catalog = await graph_store.list_document_catalog()
+    catalog_by_id: dict[str, DocumentInput] = {
+        item["document_id"]: {
+            "document_id": item["document_id"],
+            "version_id": "",
+            "text": "",
+            "source": item["source"],
+        }
+        for item in catalog
+    }
+    catalog_by_id.update({document["document_id"]: document for document in documents})
+    return list(catalog_by_id.values())
+
+
+async def _replace_document_references(graph_store, document: DocumentInput, chunks: list[Chunk], catalog):
+    catalog_by_id = {item["document_id"]: item for item in catalog}
+    catalog_by_id[document["document_id"]] = document
+    links = resolve_references(document, chunks, list(catalog_by_id.values()))
+    await graph_store.replace_references(document["document_id"], links)
 
 
 async def index_file(path: Path) -> int:
     try:
         documents = load_documents(path)
-        written = [(document, await index_document(document)) for document in documents]
-        if any(chunks for _, chunks in written):
-            _, graph_store = get_real_stores()
-            # 모든 문서 노드가 생긴 뒤에 참조를 해석하고 관계를 만든다
-            for document, chunks in written:
+        _, graph_store = get_real_stores()
+        reference_catalog = await _reference_catalog(graph_store, documents)
+        written = 0
+        errors: list[Exception] = []
+        indexed: list[tuple[DocumentInput, list[Chunk]]] = []
+        # 각 문서를 독립 처리해 하나의 실패가 앞선 문서의 참조 갱신까지 건너뛰게 하지 않는다.
+        for document in documents:
+            try:
+                chunks = await index_document(document, reference_catalog, update_references=False)
+                written += len(chunks)
                 if chunks:
-                    links = resolve_references(document, chunks, documents)
-                    await graph_store.replace_references(document["document_id"], links)
-        return sum(len(chunks) for _, chunks in written)
+                    indexed.append((document, chunks))
+            except Exception as exc:
+                errors.append(exc)
+                logger.error("Document indexing failed; remaining documents will continue")
+        # 모든 성공 문서 노드가 생긴 뒤 관계를 바꿔 참조 대상의 입력 순서에 의존하지 않게 한다.
+        for document, chunks in indexed:
+            try:
+                await _replace_document_references(graph_store, document, chunks, reference_catalog)
+            except Exception as exc:
+                errors.append(exc)
+                logger.error("Reference indexing failed; remaining documents will continue")
+        if errors:
+            # 원래 예외가 문서 본문·연결 문자열을 포함할 수 있어 CLI에 전파하지 않는다.
+            raise RuntimeError(f"{len(errors)}개 문서 적재에 실패했습니다.")
+        return written
     finally:
         await close_stores()
 

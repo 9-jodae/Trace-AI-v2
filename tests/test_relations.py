@@ -6,9 +6,9 @@ def document(document_id, source, text):
     return {"document_id": document_id, "version_id": f"{document_id}-v1", "source": source, "text": text}
 
 
-def test_document_names_include_title_and_first_nonempty_line():
+def test_document_names_only_include_title_not_body_text():
     item = document("a", "a-file.pdf", "\n# 출장 신청 안내\n내용")
-    assert document_names(item) == ["a-file.pdf", "출장 신청 안내"]
+    assert document_names(item) == ["a-file.pdf", "a-file"]
 
 
 def test_resolves_only_explicit_known_references_to_source_chunk():

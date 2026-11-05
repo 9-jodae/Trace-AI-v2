@@ -24,6 +24,8 @@ class FakeStore:
         self.fulltext_error = fulltext_error
         self.calls = []
         self.filter_calls = []
+        self.document_calls = []
+        self.expansion_calls = []
         self.fulltext_calls = []
 
     async def search(self, query_or_embedding, limit, *scope):
@@ -39,6 +41,25 @@ class FakeStore:
         if self.fulltext_error:
             raise self.fulltext_error
         return self.fulltext_result
+
+    async def seed_documents(self, query):
+        self.calls.append((query, service.GRAPH_CANDIDATE_LIMIT))
+        if self.error:
+            raise self.error
+        return ["doc"] if self.result else []
+
+    async def search_from_documents(self, document_ids, limit):
+        self.expansion_calls.append((document_ids, limit))
+        return [item["id"] if isinstance(item, dict) else item for item in self.result[:limit]]
+
+    async def list_document_catalog(self):
+        return []
+
+    async def accessible_document_ids(self, document_ids, scope, filters=None):
+        self.document_calls.append((document_ids, scope, filters))
+        if scope is None or self.accessible == set():
+            return set()
+        return set(document_ids)
 
     async def filter_accessible(self, chunk_ids, scope, filters=None):
         self.filter_calls.append((chunk_ids, scope, filters))
@@ -83,7 +104,13 @@ def test_stores_run_in_parallel(stores):
         event = None
         order = []
 
-        async def search(self, value, limit, *scope):
+        async def seed_documents(self, value):
+            Waiting.order.append("start")
+            await asyncio.sleep(0)
+            Waiting.order.append("end")
+            return []
+
+        async def search(self, query_or_embedding, limit, *scope):
             Waiting.order.append("start")
             await asyncio.sleep(0)
             Waiting.order.append("end")
@@ -219,7 +246,7 @@ class TestRealStoreSelection:
         monkeypatch.setattr(service, "embed_query", embed)
         result = asyncio.run(service.search("질문"))
         assert result == {"chunks": [chunk("a")], "failed_sources": []}
-        assert vector.filter_calls == [([], SCOPE_FROM_ENV, None)]
+        assert vector.document_calls == [] and vector.filter_calls == []
 
     def test_close_stores_closes_both(self, monkeypatch, neo4j):
         closed = []
@@ -298,6 +325,14 @@ class TestGraphPermissionFilter:
         stores(FakeStore([chunk("a")], filter_error=RuntimeError("db")), FakeStore([chunk("secret")]))
         result = asyncio.run(service.search("질문"))
         assert result == {"chunks": [chunk("a")], "failed_sources": ["graph"]}
+
+    def test_inaccessible_seed_is_rejected_before_graph_expansion(self, stores):
+        vector, graph = FakeStore(accessible=set()), FakeStore([chunk("secret")])
+        stores(vector, graph)
+        result = asyncio.run(service.search("질문"))
+        assert graph.expansion_calls == []
+        assert result["chunks"] == []
+        assert vector.document_calls == [(["doc"], SCOPE, None)]
 
     def test_postgres_down_exposes_nothing(self, stores):
         down = RuntimeError("db")

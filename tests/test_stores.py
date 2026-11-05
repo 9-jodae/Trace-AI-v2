@@ -249,6 +249,19 @@ class TestPostgresVectorStore:
         assert "ORDER BY r.ordinality" in sql
         assert params == (["b", "a"], *SCOPE, ["pdf"], None, None, None, None)
 
+    def test_graph_seed_document_access_is_checked_in_postgres_with_filters(self, connect):
+        connection = FakeConnection(rows=[{"id": "doc-a"}])
+        connect(connection)
+        filters = SearchFilters(document_types=["POLICY"])
+        result = asyncio.run(
+            stores.PostgresVectorStore("x").accessible_document_ids(["doc-a", "doc-b"], SCOPE, filters)
+        )
+        assert result == {"doc-a"}
+        sql, params = data_statements(connection)[0]
+        assert "FROM accessible_chunks(" in sql
+        assert "dv.document_id = ANY(%s::uuid[])" in sql
+        assert params == (*SCOPE, None, ["POLICY"], None, None, None, ["doc-a", "doc-b"])
+
     @pytest.mark.parametrize("ids, scope", [(["a"], None), ([], SCOPE)])
     def test_fetch_accessible_without_ids_or_scope_does_not_connect(self, ids, scope):
         assert asyncio.run(stores.PostgresVectorStore("x").fetch_accessible(ids, scope)) == []

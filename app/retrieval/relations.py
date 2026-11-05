@@ -1,5 +1,6 @@
 import re
 import unicodedata
+from pathlib import PurePath
 
 from typing_extensions import TypedDict
 
@@ -21,14 +22,9 @@ def normalize_name(value: str) -> str:
 
 
 def document_names(document: DocumentInput) -> list[str]:
-    """문서 제목과 본문 첫 줄만 참조 해석에 사용한다."""
-    first_line = next((line for line in document["text"].splitlines() if line.strip()), "")
-    first_line = first_line.lstrip("# ").strip()
-    names = [
-        name
-        for name in (document["source"], first_line)
-        if name and len(name) <= MAX_DOCUMENT_NAME_LENGTH
-    ]
+    """문서 제목만 참조 해석 이름으로 사용해 본문이 그래프 메타데이터에 복사되지 않게 한다."""
+    source = document["source"]
+    names = [name for name in (source, PurePath(source).stem) if name and len(name) <= MAX_DOCUMENT_NAME_LENGTH]
     return list(dict.fromkeys(normalized for name in names if (normalized := normalize_name(name))))
 
 

@@ -96,8 +96,16 @@ async def search(
         return await vector_store.search(await embed_query(query), SOURCE_LIMIT, scope, filters)
 
     async def search_graph() -> list[Chunk]:
-        # Neo4j는 ID만 찾고 본문은 PostgreSQL 권한 함수가 허용한 행에서 다시 읽는다
-        candidate_ids = await graph_store.search(query, GRAPH_CANDIDATE_LIMIT)
+        # Neo4j 제목 매칭 결과를 먼저 PostgreSQL에서 허용된 현재 문서인지 확인한 뒤에만 관계를 확장한다.
+        seed_ids = await graph_store.seed_documents(query)
+        if not seed_ids:
+            return []
+        allowed_seed_ids = await vector_store.accessible_document_ids(seed_ids, scope, filters)
+        if not allowed_seed_ids:
+            return []
+        candidate_ids = await graph_store.search_from_documents(
+            [document_id for document_id in seed_ids if document_id in allowed_seed_ids], GRAPH_CANDIDATE_LIMIT
+        )
         return await vector_store.fetch_accessible(candidate_ids[:GRAPH_CANDIDATE_LIMIT], scope, filters)
 
     names = ["vector", "graph"]

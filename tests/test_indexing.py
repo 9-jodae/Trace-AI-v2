@@ -18,7 +18,10 @@ DOCUMENT = {
 
 @pytest.fixture
 def setup(monkeypatch):
-    state = {"embedded": [], "vector": [], "graph": [], "references": [], "closed": 0, "current": True, "stored": True}
+    state = {
+        "embedded": [], "vector": [], "graph": [], "references": [], "catalog": [], "closed": 0,
+        "current": True, "stored": True,
+    }
 
     async def embed(texts):
         state["embedded"].append(texts)
@@ -35,9 +38,16 @@ def setup(monkeypatch):
     class Graph:
         async def replace_document(self, document_id, source, names, chunks):
             state["graph"].append((document_id, source, names, chunks))
+            state["catalog"] = [item for item in state["catalog"] if item["document_id"] != document_id]
+            state["catalog"].append({"document_id": document_id, "source": source})
 
         async def replace_references(self, document_id, links):
-            state["references"].append((document_id, links))
+            existing = {item["document_id"] for item in state["catalog"]}
+            available = [link for link in links if link["target_document_id"] in existing]
+            state["references"].append((document_id, available))
+
+        async def list_document_catalog(self):
+            return state["catalog"]
 
     async def close():
         state["closed"] += 1
@@ -132,6 +142,45 @@ def test_index_file_resolves_explicit_reference_after_all_documents_exist(setup,
         "target_document_id": "target",
         "chunk_id": setup["graph"][0][3][0]["id"],
     }]
+
+
+def test_partial_file_uses_existing_graph_catalog_for_cross_file_reference(setup, monkeypatch, tmp_path):
+    source = {
+        "document_id": "source",
+        "version_id": "source-v1",
+        "source": "출장 신청 안내.pdf",
+        "text": "본문 첫 줄은 제목이 아닙니다.\n《경비 처리 절차》를 참조합니다.",
+    }
+    setup["catalog"] = [{"document_id": "target", "source": "경비 처리 절차.pdf"}]
+    monkeypatch.setattr(indexing, "load_documents", lambda path: [source])
+
+    asyncio.run(indexing.index_file(tmp_path / "partial.json"))
+
+    assert setup["references"] == [("source", [{
+        "source_document_id": "source",
+        "target_document_id": "target",
+        "chunk_id": setup["graph"][0][3][0]["id"],
+    }])]
+    assert "본문 첫 줄은 제목이 아닙니다." not in repr(setup["graph"][0][2])
+
+
+def test_index_file_continues_after_one_document_fails(setup, monkeypatch, tmp_path, caplog):
+    first = {**DOCUMENT, "document_id": "bad", "version_id": "bad-v1", "text": "민감 본문 A"}
+    second = {**DOCUMENT, "document_id": "good", "version_id": "good-v1", "text": "공개 본문 B"}
+    monkeypatch.setattr(indexing, "load_documents", lambda path: [first, second])
+
+    async def embed(texts):
+        if "민감 본문 A" in texts[0]:
+            raise RuntimeError("민감 본문 A를 포함한 예외")
+        return [[0.1] for _ in texts]
+
+    monkeypatch.setattr(indexing, "embed_documents", embed)
+    with pytest.raises(RuntimeError, match="1개 문서 적재에 실패했습니다"):
+        asyncio.run(indexing.index_file(tmp_path / "partial.json"))
+
+    assert [item[0] for item in setup["vector"]] == ["good-v1"]
+    assert [item[0] for item in setup["graph"]] == ["good"]
+    assert "민감 본문 A" not in caplog.text
 
 
 class TestStaleVersion:

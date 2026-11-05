@@ -2,38 +2,44 @@ import re
 
 from neo4j import AsyncDriver, AsyncGraphDatabase, Query
 
-from app.retrieval.relations import DocumentReference, normalize_name
+from app.retrieval.relations import DocumentReference, document_names, normalize_name
 from app.retrieval.schemas import Chunk
 
 CONNECT_TIMEOUT_SECONDS = 5
 QUERY_TIMEOUT_SECONDS = 5
 MIN_NAME_LENGTH = 2
+CHUNKS_PER_DOCUMENT_LIMIT = 5
 
 # Neo4j에는 본문과 권한을 두지 않고 문서·청크 위치와 참조 관계만 저장한다.
 SCHEMA_STATEMENTS = (
     "CREATE CONSTRAINT document_id IF NOT EXISTS FOR (d:Document) REQUIRE d.document_id IS UNIQUE",
     "CREATE CONSTRAINT chunk_id IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE",
 )
-SEEDS_CYPHER = "MATCH (d:Document) RETURN d.document_id AS id, d.names AS names"
+SEEDS_CYPHER = "MATCH (d:Document) RETURN d.document_id AS id, d.source AS source"
+DOCUMENT_CATALOG_CYPHER = "MATCH (d:Document) RETURN d.document_id AS document_id, d.source AS source"
 REFERENCE_SEARCH_CYPHER = """
 CALL {
     UNWIND $documents AS document_id
     MATCH (d:Document {document_id: document_id})-[:HAS_CHUNK]->(c:Chunk)
-    RETURN c.id AS id, 0 AS priority
+    RETURN c.id AS id, d.document_id AS document_id, c.chunk_index AS chunk_index, 2 AS priority
     UNION ALL
     UNWIND $documents AS document_id
     MATCH (d:Document {document_id: document_id})-[r:REFERENCES]-(related:Document)
     MATCH (related)-[:HAS_CHUNK]->(c:Chunk)
-    RETURN c.id AS id, 1 AS priority
+    RETURN c.id AS id, related.document_id AS document_id, c.chunk_index AS chunk_index, 1 AS priority
     UNION ALL
     UNWIND $documents AS document_id
     MATCH (d:Document {document_id: document_id})-[r:REFERENCES]-(related:Document)
     MATCH (source:Document)-[:HAS_CHUNK]->(reference_chunk:Chunk {id: r.chunk_id})
-    RETURN reference_chunk.id AS id, 2 AS priority
+    RETURN reference_chunk.id AS id, source.document_id AS document_id,
+           reference_chunk.chunk_index AS chunk_index, 0 AS priority
 }
-WITH id, min(priority) AS priority
+WITH id, document_id, min(priority) AS priority, min(chunk_index) AS chunk_index
+ORDER BY priority, document_id, chunk_index, id
+WITH document_id, priority, collect(id)[0..$per_document_limit] AS ids
+UNWIND ids AS id
 RETURN id
-ORDER BY priority, id
+ORDER BY priority, document_id, id
 LIMIT $limit
 """
 MERGE_DOCUMENT_CYPHER = """
@@ -47,7 +53,10 @@ DETACH DELETE c
 CREATE_CHUNKS_CYPHER = """
 MATCH (d:Document {document_id: $document_id})
 UNWIND $chunks AS item
-CREATE (c:Chunk {id: item.id, version_id: item.version_id, char_start: item.char_start, char_end: item.char_end})
+CREATE (c:Chunk {
+    id: item.id, version_id: item.version_id, chunk_index: item.chunk_index,
+    char_start: item.char_start, char_end: item.char_end
+})
 CREATE (d)-[:HAS_CHUNK]->(c)
 """
 DELETE_REFERENCES_CYPHER = "MATCH (:Document {document_id: $document_id})-[r:REFERENCES]->() DELETE r"
@@ -88,20 +97,38 @@ class Neo4jGraphStore:
             result = await session.run(Query(statement, timeout=QUERY_TIMEOUT_SECONDS), parameters)
             return [dict(record) async for record in result]
 
-    async def search(self, query: str, limit: int) -> list[str]:
+    async def seed_documents(self, query: str) -> list[str]:
         normalized_query = normalize_name(query)
         if not normalized_query:
             return []
         seeds = await self._read(SEEDS_CYPHER, {})
-        document_ids = [
+
+        def matches_title(seed: dict) -> bool:
+            document = {
+                "document_id": seed["id"],
+                "version_id": "",
+                "text": "",
+                "source": seed["source"] or "",
+            }
+            return any(name_in_query(name, normalized_query) for name in document_names(document))
+
+        return [
             seed["id"]
             for seed in seeds
-            if any(name_in_query(name, normalized_query) for name in (seed["names"] or []))
+            if matches_title(seed)
         ]
+
+    async def search_from_documents(self, document_ids: list[str], limit: int) -> list[str]:
         if not document_ids:
             return []
-        rows = await self._read(REFERENCE_SEARCH_CYPHER, {"documents": document_ids, "limit": limit})
+        rows = await self._read(
+            REFERENCE_SEARCH_CYPHER,
+            {"documents": document_ids, "limit": limit, "per_document_limit": CHUNKS_PER_DOCUMENT_LIMIT},
+        )
         return [row["id"] for row in rows]
+
+    async def list_document_catalog(self) -> list[dict[str, str]]:
+        return await self._read(DOCUMENT_CATALOG_CYPHER, {})
 
     async def ensure_schema(self) -> None:
         async with self._driver.session(database=self._database) as session:
@@ -112,7 +139,10 @@ class Neo4jGraphStore:
         async def write(tx) -> None:
             await (await tx.run(MERGE_DOCUMENT_CYPHER, document_id=document_id, source=source, names=names)).consume()
             await (await tx.run(DELETE_DOCUMENT_CHUNKS_CYPHER, document_id=document_id)).consume()
-            items = [{key: chunk[key] for key in ("id", "version_id", "char_start", "char_end")} for chunk in chunks]
+            items = [
+                {key: chunk[key] for key in ("id", "version_id", "chunk_index", "char_start", "char_end")}
+                for chunk in chunks
+            ]
             if items:
                 await (await tx.run(CREATE_CHUNKS_CYPHER, document_id=document_id, chunks=items)).consume()
 
