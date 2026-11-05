@@ -35,6 +35,14 @@ WHERE to_tsvector('simple', c.content) @@ to_tsquery('simple', %s)
 ORDER BY ts_rank_cd(to_tsvector('simple', c.content), to_tsquery('simple', %s)) DESC, c.id
 LIMIT %s
 """
+FETCH_ACCESSIBLE_SQL = """
+SELECT c.id::text AS id, c.content AS text, d.title AS source, dv.document_id::text AS document_id,
+       c.document_version_id::text AS version_id, c.char_start, c.char_end
+FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
+JOIN document_versions dv ON dv.id = c.document_version_id
+JOIN documents d ON d.id = dv.document_id
+WHERE c.id = ANY(%s::uuid[])
+"""
 FILTER_ACCESSIBLE_SQL = """
 SELECT chunk_id::text AS id
 FROM filter_accessible_chunk_ids(%s::uuid, %s::text, %s::text, %s::boolean, %s::uuid[]) AS chunk_id
@@ -87,14 +95,18 @@ class VectorStore(Protocol):
         self, query: str, limit: int, scope: AccessScope | None, filters: SearchFilters | None = None
     ) -> list[Chunk]: ...
 
+    async def fetch_accessible(
+        self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> list[Chunk]: ...
+
     async def filter_accessible(
         self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
     ) -> set[str]: ...
 
 
 class GraphStore(Protocol):
-    # 그래프에는 권한 정보가 없으므로 결과는 VectorStore.filter_accessible을 거쳐야 내보낼 수 있다
-    async def search(self, query: str, limit: int) -> list[Chunk]: ...
+    # 그래프에는 권한과 본문이 없으므로 찾은 ID는 VectorStore.fetch_accessible을 거쳐야 내보낼 수 있다
+    async def search(self, query: str, limit: int) -> list[dict]: ...
 
 
 def _to_vector(embedding: list[float]) -> str:
@@ -175,6 +187,13 @@ class PostgresVectorStore:
             return []
         return await self._read(FULLTEXT_SEARCH_SQL, (*scope, *_filter_params(filters), expression, expression, limit))
 
+    async def fetch_accessible(
+        self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> list[Chunk]:
+        if scope is None or not chunk_ids:
+            return []
+        return await self._read(FETCH_ACCESSIBLE_SQL, (*scope, *_filter_params(filters), chunk_ids))
+
     async def filter_accessible(
         self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
     ) -> set[str]:
@@ -218,10 +237,15 @@ class NoGraphStore:
     async def close(self) -> None:
         pass
 
-    async def search(self, query: str, limit: int) -> list[Chunk]:
+    async def search(self, query: str, limit: int) -> list[dict]:
         return []
 
-    async def replace_version(self, version_id: str, document_id: str, document: dict, chunks: list[Chunk]) -> None:
+    async def replace_version(
+        self, document_id: str, source: str, names: list[str], chunks: list[Chunk], mentions: list[dict]
+    ) -> None:
+        pass
+
+    async def replace_references(self, document_id: str, links: list[dict]) -> None:
         pass
 
 
@@ -244,6 +268,11 @@ class SampleVectorStore:
     ) -> list[Chunk]:
         return []
 
+    async def fetch_accessible(
+        self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> list[Chunk]:
+        return [chunk for chunk in SAMPLE_CHUNKS if chunk["id"] in chunk_ids]
+
     async def filter_accessible(
         self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
     ) -> set[str]:
@@ -251,7 +280,7 @@ class SampleVectorStore:
 
 
 class SampleGraphStore:
-    async def search(self, query: str, limit: int) -> list[Chunk]:
+    async def search(self, query: str, limit: int) -> list[dict]:
         normalized = "".join(query.split()).casefold()
         linked = [
             chunk_id

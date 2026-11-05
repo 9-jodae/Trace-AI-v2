@@ -418,3 +418,33 @@ class TestFulltext:
 
     def test_sample_store_returns_nothing(self):
         assert asyncio.run(stores.SampleVectorStore().fulltext("재택근무", 3, None)) == []
+
+
+class TestFetchAccessible:
+    @pytest.fixture
+    def read(self, monkeypatch):
+        calls = []
+
+        async def fake(self, sql, params):
+            calls.append((sql, params))
+            return [chunk("a")]
+
+        monkeypatch.setattr(stores.PostgresVectorStore, "_read", fake)
+        return calls
+
+    def test_goes_through_permission_function_with_filters(self, read):
+        filters = SearchFilters(extensions=["pdf"])
+        assert asyncio.run(stores.PostgresVectorStore("x").fetch_accessible(["a"], SCOPE, filters)) == [chunk("a")]
+        sql, params = read[0]
+        assert "FROM accessible_chunks(" in sql and "ANY(%s::uuid[])" in sql
+        assert params == (*SCOPE, ["pdf"], None, None, None, None, ["a"])
+
+    @pytest.mark.parametrize("ids, scope", [(["a"], None), ([], SCOPE)])
+    def test_no_scope_or_ids_makes_no_query(self, read, ids, scope):
+        assert asyncio.run(stores.PostgresVectorStore("x").fetch_accessible(ids, scope)) == []
+        assert read == []
+
+    def test_sample_store_returns_requested_chunks(self):
+        result = asyncio.run(stores.SampleVectorStore().fetch_accessible(["remote-1", "없음"], None))
+        assert [item["id"] for item in result] == ["remote-1"]
+

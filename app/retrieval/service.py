@@ -98,8 +98,9 @@ async def search(
     async def search_graph() -> list[Chunk]:
         # 권한을 확인하지 못하면 그래프 결과도 내보내지 않도록 실패로 처리한다
         candidates = await graph_store.search(query, GRAPH_CANDIDATE_LIMIT)
-        accessible = await vector_store.filter_accessible([chunk["id"] for chunk in candidates], scope, filters)
-        return [chunk for chunk in candidates if chunk["id"] in accessible][:SOURCE_LIMIT]
+        chunk_ids = [candidate["id"] for candidate in candidates]
+        chunks = {chunk["id"]: chunk for chunk in await vector_store.fetch_accessible(chunk_ids, scope, filters)}
+        return [chunks[chunk_id] for chunk_id in chunk_ids if chunk_id in chunks][:SOURCE_LIMIT]
 
     names = ["vector", "graph"]
     results = await asyncio.gather(search_vector(), search_graph(), return_exceptions=True)

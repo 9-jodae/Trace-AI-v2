@@ -38,6 +38,10 @@ class FakeStore:
             raise self.fulltext_error
         return self.fulltext_result
 
+    async def fetch_accessible(self, chunk_ids, scope, filters=None):
+        accessible = await self.filter_accessible(chunk_ids, scope, filters)
+        return [chunk(chunk_id) for chunk_id in chunk_ids if chunk_id in accessible]
+
     async def filter_accessible(self, chunk_ids, scope, filters=None):
         self.filter_calls.append((chunk_ids, scope, filters))
         if self.filter_error:

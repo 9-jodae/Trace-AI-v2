@@ -19,6 +19,8 @@
 
 샘플 데이터를 켜지 않으면 `DATABASE_URL`(pgvector)이 필요합니다. 없으면 검색 경로는 503을 반환하며, 샘플로 대체하지 않습니다. 그래프 검색은 선택이라 `NEO4J_URI`를 비우면 벡터 검색만 씁니다. `NEO4J_URI`를 넣으면 `NEO4J_PASSWORD`도 필요합니다.
 
+그래프는 Neo4j에 문서, 청크 위치, 엔티티, 문서 간 참조만 저장합니다. 본문과 권한은 저장하지 않고, 찾은 청크 ID로 PostgreSQL 권한 함수에서 본문을 읽습니다. 문서 간 참조는 본문의 《문서명》과 `[[문서명]]`을 규칙으로 찾습니다. 엔티티는 적재 때 `--extract-entities`를 붙일 때만 LLM으로 추출하며, 이때 청크 본문이 LLM으로 전송됩니다.
+
 검색은 벡터와 그래프를 동시에 조회하고, 그래프 후보가 5개 미만이면 PostgreSQL 전문 검색을 더해 RRF로 합칩니다. 전문 검색은 `simple` 설정이라 "연차는"처럼 조사가 붙은 단어는 "연차"와 맞지 않을 수 있습니다.
 
 권한은 서버의 `accessible_chunks`와 `filter_accessible_chunk_ids`로 판단합니다. 그래프 검색 결과와 재사용할 이전 근거도 `filter_accessible_chunk_ids`를 거치므로, PostgreSQL이 멈추면 그래프 결과도 내보내지 않습니다.

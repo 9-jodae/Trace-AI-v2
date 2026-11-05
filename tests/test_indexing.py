@@ -18,7 +18,7 @@ DOCUMENT = {
 
 @pytest.fixture
 def setup(monkeypatch):
-    state = {"embedded": [], "vector": [], "graph": [], "closed": 0}
+    state = {"embedded": [], "vector": [], "graph": [], "references": [], "closed": 0}
 
     async def embed(texts):
         state["embedded"].append(texts)
@@ -29,8 +29,11 @@ def setup(monkeypatch):
             state["vector"].append((version_id, chunks, embeddings))
 
     class Graph:
-        async def replace_version(self, version_id, document_id, document, chunks):
-            state["graph"].append((version_id, document_id, document, chunks))
+        async def replace_version(self, document_id, source, names, chunks, mentions):
+            state["graph"].append((document_id, source, names, chunks, mentions))
+
+        async def replace_references(self, document_id, links):
+            state["references"].append((document_id, links))
 
     async def close():
         state["closed"] += 1
@@ -44,10 +47,11 @@ def setup(monkeypatch):
 def test_chunks_embeds_and_writes_both_stores(setup):
     count = asyncio.run(indexing.index_document(DOCUMENT))
     version, chunks, embeddings = setup["vector"][0]
-    assert count == len(chunks) == len(embeddings) > 1
+    assert len(count) == len(chunks) == len(embeddings) > 1
     assert version == "ver"
-    graph_version, document_id, metadata, graph_chunks = setup["graph"][0]
-    assert (graph_version, document_id) == ("ver", "doc") and graph_chunks == chunks
+    document_id, source, names, graph_chunks, mentions = setup["graph"][0]
+    assert (document_id, source) == ("doc", "규정") and graph_chunks == chunks and mentions == []
+    assert "규정" in names
 
 
 def test_embeds_chunk_text(setup):
@@ -62,13 +66,32 @@ def test_chunks_carry_server_columns(setup):
     assert all(len(c["content_hash"]) == 64 for c in chunks)
 
 
-def test_document_text_is_not_copied_to_metadata(setup):
+def test_graph_receives_no_document_text(setup):
     asyncio.run(indexing.index_document(DOCUMENT))
-    assert "text" not in setup["graph"][0][2]
+    _, source, names, _, _ = setup["graph"][0]
+    assert DOC_TEXT not in (source, *names)
+
+
+def test_entities_are_not_extracted_by_default(setup, monkeypatch):
+    async def forbidden(chunks):
+        raise AssertionError("LLM을 호출하면 안 됩니다")
+
+    monkeypatch.setattr(indexing, "extract_mentions", forbidden)
+    asyncio.run(indexing.index_document(DOCUMENT))
+    assert setup["graph"][0][4] == []
+
+
+def test_entities_are_extracted_when_requested(setup, monkeypatch):
+    async def extract(chunks):
+        return [{"chunk_id": chunks[0]["id"]}]
+
+    monkeypatch.setattr(indexing, "extract_mentions", extract)
+    asyncio.run(indexing.index_document(DOCUMENT, extract_entities=True))
+    assert len(setup["graph"][0][4]) == 1
 
 
 def test_blank_document_does_not_touch_stores(setup):
-    assert asyncio.run(indexing.index_document({**DOCUMENT, "text": "   "})) == 0
+    assert asyncio.run(indexing.index_document({**DOCUMENT, "text": "   "})) == []
     assert setup["vector"] == [] and setup["graph"] == [] and setup["embedded"] == []
 
 
@@ -99,3 +122,17 @@ def test_index_file_indexes_all_and_closes(setup):
     path = Path(__file__).parents[1] / "data/demo_documents.json"
     assert asyncio.run(indexing.index_file(path)) > 0
     assert len(setup["vector"]) == 8 and setup["closed"] == 1
+
+
+def test_index_file_links_references_after_all_documents(setup, tmp_path):
+    items = [
+        {"doc_id": "a", "version_id": "va", "title": "출장비 규정", "text": "결재는 《경비 결재 절차》를 따른다."},
+        {"doc_id": "b", "version_id": "vb", "title": "expense", "text": "경비 결재 절차\n내용"},
+    ]
+    path = tmp_path / "docs.json"
+    path.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
+    assert asyncio.run(indexing.index_file(path)) == 2
+    links = dict(setup["references"])
+    assert [link["target_document_id"] for link in links["a"]] == ["b"]
+    assert links["b"] == [] and setup["closed"] == 1
+
