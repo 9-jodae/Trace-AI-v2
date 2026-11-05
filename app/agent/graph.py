@@ -261,12 +261,11 @@ async def _alternate_search(state: AgentState) -> tuple[str, SearchResult] | Non
 
 
 async def _answer_with_documents(state: AgentState, context: list[Chunk], alternate_query: str | None) -> dict:
-    question = state["messages"][-1].text
-    if alternate_query:
-        question = f"{question}\n(같은 뜻의 다른 표기: {alternate_query})"
+    original = state["messages"][-1].text
+    question = f"{original}\n(같은 뜻의 다른 표기: {alternate_query})" if alternate_query else original
     edit_request = state.get("edit_request", False)
     extra = {"edit_request": True} if edit_request else {}
-    if _is_conflict_scan(question):
+    if _is_conflict_scan(original):
         extra["conflict_scan"] = True
     registered = state.get("registered_conflicts")
     if registered:

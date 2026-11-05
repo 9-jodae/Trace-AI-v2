@@ -146,6 +146,20 @@ async def test_answer_marks_partial_when_some_conflicts_are_dropped(monkeypatch)
     assert seen == {"conflict_scan": True, "registered_conflicts": registered, "registered_partial": True}
 
 
+@pytest.mark.anyio
+async def test_alternate_query_keeps_conflict_scan(monkeypatch):
+    seen = {}
+
+    async def generate(question, context, history, **extra):
+        seen.update(extra)
+        return '{"answer": "답", "evidence": []}'
+
+    monkeypatch.setattr(graph, "generate_answer", generate)
+    state = {"messages": [HumanMessage(content="문서 간 충돌 찾아줘")]}
+    await graph._answer_with_documents(state, [chunk("c1", "문서 1")], "conflict between documents")
+    assert seen == {"conflict_scan": True}
+
+
 class TestPrompt:
     REGISTERED = [{"item": "연차", "source": "문서 1", "other_source": "문서 2"}]
 
