@@ -31,7 +31,7 @@ python3 -m venv .venv
 | `DATABASE_URL` | `postgresql://ai_app:비밀번호@localhost:5432/docs199` | |
 | `EMBEDDING_MODEL` | `bedrock:amazon.titan-embed-text-v2:0` | 인스턴스 역할 사용 |
 | `EMBEDDING_DIMENSIONS` | `1024` | |
-| `AWS_REGION` | `ap-northeast-1` | 중계 API와 같은 도쿄 리전 |
+| `BEDROCK_REGION` | `ap-northeast-1` | Titan과 Haiku 호출 리전. 서버의 `AWS_REGION`은 `ap-southeast-1`이라 따로 지정 |
 | `LLM_MODEL` | `bedrock:jp.anthropic.claude-haiku-4-5-20251001-v1:0` | 도쿄 리전 추론 프로필 |
 | `NEO4J_URI`, `JEV_API_KEY` | 비움 | 중간 발표 범위 밖 |
 

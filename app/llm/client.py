@@ -49,7 +49,7 @@ def build_prompt(question: str, context: list[Chunk]) -> str:
 @lru_cache(maxsize=2)
 def _build_model(model_name: str, api_key: str | None):
     # Bedrock은 API 키 대신 실행 환경의 AWS 자격 증명을 쓴다
-    credentials = {} if config.uses_aws_credentials(model_name) else {"api_key": api_key}
+    credentials = config.bedrock_options() if config.uses_aws_credentials(model_name) else {"api_key": api_key}
     return init_chat_model(model_name, max_retries=MAX_RETRIES, **credentials)
 
 

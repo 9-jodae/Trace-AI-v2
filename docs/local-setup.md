@@ -29,7 +29,7 @@ JSON 문서는 `python -m app.retrieval.indexing <파일>`로 적재합니다. �
 
 대화는 메모리에 저장하며 대화당 최근 메시지 6개와 컨텍스트만 보관합니다. 기본값은 최대 1,000개 대화, 1시간이고 `MAX_CONVERSATIONS`, `CONVERSATION_TTL_SECONDS`로 바꿀 수 있습니다. 서버를 재시작하면 사라집니다.
 
-임베딩과 LLM을 Bedrock으로 쓰면 API 키 없이 AWS 자격 증명과 `AWS_REGION`을 사용합니다. 임베딩은 질문과 문서 모두 Titan v2, 1024차원, `normalize=true`로 맞춥니다.
+임베딩과 LLM을 Bedrock으로 쓰면 API 키 없이 AWS 자격 증명과 `BEDROCK_REGION`을 사용합니다. 비워 두면 AWS 기본 리전을 따릅니다. 임베딩은 질문과 문서 모두 Titan v2, 1024차원, `normalize=true`로 맞춥니다.
 
 노트북에서는 `EMBEDDING_PROXY_URL`로 서버의 임시 임베딩 중계를 쓸 수 있습니다. `INTERNAL_SECRET` 값을 `X-Internal-Secret` 헤더로 보내고, 평문이 공개망을 지나지 않도록 SSH 터널(`-L 18880:localhost:18080`) 주소를 씁니다. 운영 환경에서는 이 설정을 무시합니다. 문서 일괄 적재는 팀 서버에서 직접 실행하는 것을 권장합니다.
 

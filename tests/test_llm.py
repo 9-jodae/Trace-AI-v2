@@ -116,6 +116,19 @@ class TestGenerateAnswer:
         model.content = [{"type": "text", "text": "합친 "}, {"type": "text", "text": "답변"}]
         assert run() == "합친 답변"
 
+    def test_bedrock_uses_bedrock_region_without_key(self, monkeypatch, model):
+        monkeypatch.setenv("LLM_MODEL", "bedrock:jp.anthropic.claude-haiku-4-5-20251001-v1:0")
+        monkeypatch.setenv("BEDROCK_REGION", "ap-northeast-1")
+        llm._build_model.cache_clear()
+        run()
+        assert model.init_calls == [
+            (
+                "bedrock:jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+                {"max_retries": llm.MAX_RETRIES, "region_name": "ap-northeast-1"},
+            )
+        ]
+        llm._build_model.cache_clear()
+
     @pytest.mark.parametrize("name", ["LLM_API_KEY", "LLM_MODEL"])
     def test_missing_setting_raises_without_client(self, monkeypatch, model, name):
         monkeypatch.setenv(name, "")
