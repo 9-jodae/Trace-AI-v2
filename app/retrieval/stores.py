@@ -75,6 +75,16 @@ JOIN documents d ON d.id = dv.document_id
 WHERE c.embedding IS NOT NULL AND c.embedding <=> %s::vector <= %s
 ORDER BY r.ordinality
 """
+NEAREST_ACCESSIBLE_SQL = """
+SELECT c.id::text AS id, c.content AS text, d.title AS source, dv.document_id::text AS document_id,
+       c.document_version_id::text AS version_id, c.char_start, c.char_end
+FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
+JOIN document_versions dv ON dv.id = c.document_version_id
+JOIN documents d ON d.id = dv.document_id
+WHERE c.id = ANY(%s::uuid[]) AND c.embedding IS NOT NULL
+ORDER BY c.embedding <=> %s::vector
+LIMIT %s
+"""
 ACCESSIBLE_DOCUMENT_IDS_SQL = """
 SELECT DISTINCT dv.document_id::text AS id
 FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
@@ -95,6 +105,8 @@ JOIN documents d ON d.id = dv.document_id
 WHERE dv.id = %s::uuid AND dv.version_number = d.current_version AND d.deleted_at IS NULL
 """
 DELETE_VERSION_SQL = "DELETE FROM chunks WHERE document_version_id = %s"
+# ai_app은 테이블을 직접 읽거나 쓰지 못하고 이 함수만 실행한다 (docs199-Server V15)
+REPLACE_TOPICS_SQL = "SELECT replace_document_topics(%s::uuid, %s::text[])"
 INSERT_CHUNK_SQL = """
 INSERT INTO chunks (id, document_version_id, chunk_index, content, char_start, char_end, content_hash, embedding)
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s::vector)
@@ -121,6 +133,8 @@ def build_fulltext_query(text: str) -> str:
 
 
 class VectorStore(Protocol):
+    async def replace_document_topics(self, version_id: str, topics: list[str]) -> None: ...
+
     async def search(
         self, embedding: list[float], limit: int, scope: AccessScope | None, filters: SearchFilters | None = None
     ) -> list[Chunk]: ...
@@ -145,10 +159,25 @@ class VectorStore(Protocol):
         self, document_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
     ) -> set[str]: ...
 
+    async def nearest_accessible(
+        self,
+        chunk_ids: list[str],
+        scope: AccessScope | None,
+        filters: SearchFilters | None,
+        embedding: list[float],
+        limit: int,
+    ) -> list[Chunk]: ...
+
 
 class GraphStore(Protocol):
     # 그래프에는 본문과 권한을 두지 않는다. 반환한 ID를 VectorStore.fetch_accessible로 읽는다
     async def search_from_documents(self, document_ids: list[str], limit: int) -> list[str]: ...
+
+    async def search_from_entities(self, query: str, limit: int) -> list[str]: ...
+
+    async def follow_references(self, document_ids: list[str]) -> list[str]: ...
+
+    async def document_chunks(self, document_ids: list[str]) -> list[str]: ...
 
     async def list_document_catalog(self) -> list[dict[str, str]]: ...
 
@@ -276,8 +305,27 @@ class PostgresVectorStore:
         rows = await self._read(ACCESSIBLE_DOCUMENT_IDS_SQL, (*scope, *_filter_params(filters), document_ids))
         return {row["id"] for row in rows}
 
+    async def nearest_accessible(
+        self,
+        chunk_ids: list[str],
+        scope: AccessScope | None,
+        filters: SearchFilters | None,
+        embedding: list[float],
+        limit: int,
+    ) -> list[Chunk]:
+        if scope is None or not chunk_ids:
+            return []
+        params = (*scope, *_filter_params(filters), chunk_ids, _to_vector(embedding), limit)
+        return await self._read(NEAREST_ACCESSIBLE_SQL, params)
+
     async def is_current_version(self, version_id: str) -> bool:
         return bool(await self._read(IS_CURRENT_VERSION_SQL, (version_id,)))
+
+    async def replace_document_topics(self, version_id: str, topics: list[str]) -> None:
+        pool = await self._get_pool()
+        async with pool.connection() as connection:
+            await connection.execute(SET_STATEMENT_TIMEOUT_SQL, (str(WRITE_STATEMENT_TIMEOUT_MS),))
+            await connection.execute(REPLACE_TOPICS_SQL, (version_id, topics))
 
     async def replace_version(self, version_id: str, chunks: list[Chunk], embeddings: list[list[float]]) -> bool:
         # 재색인 시 줄어든 청크가 남지 않도록 같은 버전의 청크를 한 트랜잭션에서 교체한다
@@ -316,6 +364,14 @@ class NoGraphStore:
     async def close(self) -> None:
         pass
 
+    async def search_from_entities(self, query: str, limit: int) -> list[str]:
+        return []
+
+    async def follow_references(self, document_ids: list[str]) -> list[str]:
+        return []
+
+    async def document_chunks(self, document_ids: list[str]) -> list[str]:
+        return []
     async def seed_documents(self, query: str) -> list[str]:
         return []
 
@@ -385,8 +441,26 @@ class SampleVectorStore:
         # 샘플 저장소에는 권한 메타데이터가 없으며 USE_SAMPLE_DATA가 명시된 로컬 데모에서만 사용한다.
         return set(document_ids)
 
+    async def nearest_accessible(
+        self,
+        chunk_ids: list[str],
+        scope: AccessScope | None,
+        filters: SearchFilters | None,
+        embedding: list[float],
+        limit: int,
+    ) -> list[Chunk]:
+        return (await self.fetch_accessible(chunk_ids, scope, filters))[:limit]
+
 
 class SampleGraphStore:
+    async def search_from_entities(self, query: str, limit: int) -> list[str]:
+        return []
+
+    async def follow_references(self, document_ids: list[str]) -> list[str]:
+        return []
+
+    async def document_chunks(self, document_ids: list[str]) -> list[str]:
+        return []
     async def seed_documents(self, query: str) -> list[str]:
         normalized = "".join(query.split()).casefold()
         return [name for name in SAMPLE_ENTITIES if "".join(name.split()).casefold() in normalized]

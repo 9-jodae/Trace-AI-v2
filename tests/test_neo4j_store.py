@@ -145,3 +145,44 @@ def test_fake_session_matches_real_driver_signature():
     for real in (AsyncSession.run, AsyncManagedTransaction.run):
         names = list(inspect.signature(real).parameters)
         assert names[:3] == list(inspect.signature(FakeSession.run).parameters)[:3]
+
+
+def test_search_from_entities_runs_with_query_parameters():
+    class Driver(FakeDriver):
+        pass
+
+    driver = Driver()
+    store = Neo4jGraphStore(driver)
+    catalog = [{"entity_id": "e1", "name": "재무팀"}]
+    rows = {"ENTITY": catalog}
+
+    async def read(statement, parameters):
+        driver.calls.append((statement, parameters))
+        return rows["ENTITY"] if statement == neo4j_store.ENTITY_CATALOG_CYPHER else [{"id": "chunk-1"}]
+
+    store._read = read
+    assert asyncio.run(store.search_from_entities("재무팀 담당자", 10)) == ["chunk-1"]
+    assert driver.calls[1][1] == {"entity_ids": ["e1"], "predicates": ["RESPONSIBLE_FOR"], "limit": 10}
+    assert driver.calls[2][1] == {"entity_ids": ["e1"], "limit": 10}
+
+
+def test_name_in_query_matches_normalized_names_without_english_substrings():
+    assert neo4j_store.name_in_query("Jira", "JIRA 관련 문서를 찾아줘")
+    assert neo4j_store.name_in_query("재무팀", "재무팀이 담당하는 업무는?")
+    assert not neo4j_store.name_in_query("Jira", "Jirassic 업무 문서")
+
+
+def test_follow_references_is_directed_and_uses_parameters():
+    driver = FakeDriver()
+    store = Neo4jGraphStore(driver)
+
+    async def read(statement, parameters):
+        driver.calls.append((statement, parameters))
+        return [{"document_id": "b"}]
+
+    store._read = read
+    assert asyncio.run(store.follow_references(["a"])) == ["b"]
+    assert asyncio.run(store.follow_references([])) == ["b"][:0]
+    assert driver.calls == [(neo4j_store.FOLLOW_REFERENCES_CYPHER, {"documents": ["a"]})]
+    assert "-[:REFERENCES]->" in neo4j_store.FOLLOW_REFERENCES_CYPHER
+

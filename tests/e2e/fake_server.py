@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse
 import main
 from app.agent import graph
 from app.core.errors import AiUnavailableError
+from app.llm.client import NoDocumentReply
 
 CHUNK = {"id": "a", "text": "재택근무 규정은 보안팀이 승인했다.", "source": "재택근무 규정"}
 SCRIPT = (Path(__file__).parents[2] / "app/playground/index.html").read_text(encoding="utf-8")
@@ -43,6 +44,21 @@ async def generate(question, context, history):
     return f"<img src=x onerror=\"document.body.dataset.xss='1'\"> 가짜 답변: {question}"
 
 
+async def small_talk_probability(question):
+    return 0.0
+
+
+async def generate_reply(question, allow_clarification=True):
+    return NoDocumentReply(graph.NO_EVIDENCE_ANSWER, False)
+
+
+async def rewrite_query(question):
+    return None
+
+
+graph.rewrite_search_query = rewrite_query
+graph.small_talk_probability = small_talk_probability
+graph.generate_reply_without_documents = generate_reply
 graph.can_answer_probability = can_answer
 graph.search = search
 graph.filter_accessible_context = filter_context

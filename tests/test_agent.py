@@ -106,10 +106,18 @@ class TestSearchFailures:
 
 
 class TestNoResults:
-    def test_fixed_answer_without_llm(self, ask, ai):
+    def test_replies_without_documents(self, ask, ai):
         ai.search_result = {"chunks": [], "failed_sources": []}
-        body = ask("q").json()
-        assert body["answer"] == graph.NO_EVIDENCE_ANSWER and body["sources"] == [] and ai.llm_calls == []
+        ai.reply = "어떤 기간에 관한 질문인가요? 좀 더 자세히 말씀해 주세요."
+        body = ask("기간이 얼마나 됨?").json()
+        assert body["answer"] == ai.reply and body["sources"] == [] and body["evidence"] == []
+        assert ai.llm_calls == [] and ai.reply_calls == ["기간이 얼마나 됨?"]
+
+    def test_reply_failure_falls_back_to_fixed_answer(self, ask, ai):
+        ai.search_result = {"chunks": [], "failed_sources": []}
+        ai.reply = AiUnavailableError("LLM 호출 실패")
+        response = ask("q")
+        assert response.status_code == 200 and response.json()["answer"] == graph.NO_EVIDENCE_ANSWER
 
     def test_next_question_skips_jev(self, ask, ai):
         ai.search_result = {"chunks": [], "failed_sources": []}
@@ -154,3 +162,109 @@ class TestHistoryAndThreads:
         edges = {(edge.source, edge.target) for edge in graph.build_agent().get_graph().edges}
         assert ("judge_context", "generate") in edges and ("judge_context", "retrieve") in edges
         assert ("retrieve", "generate") in edges and ("generate", "__end__") in edges
+
+
+class TestSmallTalk:
+    def test_high_probability_skips_search_and_answer_model(self, ask, ai):
+        ai.small_talk = 0.9
+        ai.reply = "안녕하세요!"
+        body = ask("안녕?").json()
+        assert body["answer"] == "안녕하세요!" and body["sources"] == [] and body["evidence"] == []
+        assert ai.search_calls == [] and ai.llm_calls == [] and ai.jev_calls == []
+
+    def test_below_threshold_searches(self, ask, ai):
+        ai.small_talk = 0.89
+        body = ask("q").json()
+        assert body["answer"] == "답변: q" and ai.reply_calls == [] and len(ai.search_calls) == 1
+
+    def test_judge_failure_searches(self, ask, ai):
+        ai.small_talk = RuntimeError("JEV down")
+        assert ask("q").json()["answer"] == "답변: q" and ai.reply_calls == []
+
+    def test_no_jev_key_searches_without_judging(self, ask, ai, monkeypatch):
+        monkeypatch.setenv("JEV_API_KEY", "")
+        assert ask("q").status_code == 200 and ai.small_talk_calls == [] and len(ai.search_calls) == 1
+
+    def test_small_talk_clears_previous_sources(self, ask, ai):
+        ask("q1")
+        ai.small_talk = 0.95
+        ai.reply = "천만에요!"
+        assert ask("고마워").json()["sources"] == []
+        ai.small_talk = 0.0
+        ai.jev_calls.clear()
+        ask("q2")
+        assert ai.jev_calls == [] and len(ai.search_calls) == 2
+
+
+class TestClarificationWithoutDocuments:
+    @pytest.fixture
+    def asked(self, ask, ai):
+        ai.search_result = {"chunks": [], "failed_sources": []}
+        ai.reply = "어떤 기간에 관한 질문인가요?"
+        ai.reply_clarification = True
+        ask("기간이 얼마나 됨?")
+        ai.small_talk_calls.clear()
+        return ask
+
+    def test_next_search_keeps_previous_question(self, asked, ai):
+        asked("연차요")
+        assert ai.search_calls[-1] == "기간이 얼마나 됨?\n연차요"
+
+    def test_reply_to_clarification_skips_small_talk(self, asked, ai):
+        ai.small_talk = 0.99
+        asked("네")
+        assert ai.small_talk_calls == [] and len(ai.search_calls) == 2
+
+    def test_does_not_clarify_twice(self, asked, ai):
+        asked("글쎄")
+        assert ai.reply_allowed == [True, False]
+        asked("연차요")
+        # 표시를 다시 붙이지 않아 다음 말은 일반 질문으로 처리한다
+        assert ai.search_calls[-1] == "연차요" and ai.reply_allowed[-1] is True
+
+
+class TestAlternateSearch:
+    NO_RESULT = {"chunks": [], "failed_sources": []}
+    FOUND = {"chunks": [chunk("leave", source="leave-policy")], "failed_sources": []}
+
+    def test_empty_search_retries_with_other_spelling(self, ask, ai, monkeypatch):
+        results = [self.NO_RESULT, self.FOUND]
+
+        async def search(query, filters=None, scope=None):
+            ai.search_calls.append(query)
+            return results.pop(0)
+
+        monkeypatch.setattr(graph, "search", search)
+        ai.rewrite = "leave policy"
+        body = ask("리브 팔러시가 뭐야?").json()
+        assert ai.search_calls == ["리브 팔러시가 뭐야?", "leave policy"]
+        assert [source["id"] for source in body["sources"]] == ["leave"]
+        assert "leave policy" in ai.llm_calls[0]["question"]
+
+    def test_no_other_spelling_does_not_search_again(self, ask, ai):
+        ai.search_result = self.NO_RESULT
+        assert ask("사내 주차 등록은?").json()["answer"] == graph.NO_EVIDENCE_ANSWER
+        assert len(ai.search_calls) == 1 and ai.reply_calls == ["사내 주차 등록은?"]
+
+    def test_rewrite_failure_replies_without_documents(self, ask, ai):
+        ai.search_result = self.NO_RESULT
+        ai.rewrite = AiUnavailableError("x")
+        assert ask("q").status_code == 200 and ai.reply_calls == ["q"]
+
+    def test_refused_answer_retries_once(self, ask, ai, monkeypatch):
+        answers = [f'{{"answer": "{graph.NO_EVIDENCE_ANSWER}"}}', "답변"]
+
+        async def generate(question, context, history):
+            ai.llm_calls.append({"question": question})
+            return answers.pop(0)
+
+        monkeypatch.setattr(graph, "generate_answer", generate)
+        ai.rewrite = "leave policy"
+        body = ask("리브 팔러시가 뭐야?").json()
+        assert body["answer"] == "답변"
+        assert len(ai.llm_calls) == 2 and len(ai.search_calls) == 2 and ai.rewrite_calls == ["리브 팔러시가 뭐야?"]
+
+    def test_small_talk_refusal_falls_through_to_search(self, ask, ai):
+        ai.small_talk = 0.99
+        body = ask("리브 팔러시가 뭐야?").json()
+        assert len(ai.search_calls) == 1 and body["answer"].startswith("답변")

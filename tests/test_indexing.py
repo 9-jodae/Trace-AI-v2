@@ -35,6 +35,9 @@ def setup(monkeypatch):
             state["vector"].append((version_id, chunks, embeddings))
             return state["stored"]
 
+        async def replace_document_topics(self, version_id, topics):
+            state.setdefault("topics", []).append((version_id, topics))
+
     class Graph:
         async def replace_document(self, document_id, source, names, chunks):
             state["graph"].append((document_id, source, names, chunks))
@@ -48,6 +51,9 @@ def setup(monkeypatch):
 
         async def list_document_catalog(self):
             return state["catalog"]
+
+        async def replace_entity_graph(self, document_id, version_id, mentions, assertions):
+            state["entities"] = (document_id, version_id, mentions, assertions)
 
     async def close():
         state["closed"] += 1
@@ -196,3 +202,63 @@ class TestStaleVersion:
         assert len(setup["vector"]) == 1 and setup["graph"] == []
         assert "version changed" in caplog.text
 
+
+class TestEntityExtractionSwitch:
+    @pytest.fixture
+    def extraction(self, setup, monkeypatch):
+        calls = []
+
+        async def extract(document_id, version_id, chunks):
+            calls.append(document_id)
+            return [], []
+
+        # 테스트 저장소도 Neo4j 저장소처럼 보이게 한다
+        monkeypatch.setattr(indexing, "Neo4jGraphStore", object)
+        monkeypatch.setattr(indexing, "extract_entity_graph", extract)
+        return calls
+
+    def test_is_off_by_default(self, setup, extraction):
+        asyncio.run(indexing.index_document(DOCUMENT))
+        # 이전에 저장한 관계를 지우도록 빈 값으로 교체한다
+        assert extraction == [] and setup["entities"] == ("doc", "ver", [], [])
+
+    def test_runs_when_enabled(self, setup, extraction, monkeypatch):
+        monkeypatch.setenv("ENTITY_EXTRACTION_ENABLED", "true")
+        asyncio.run(indexing.index_document(DOCUMENT))
+        assert extraction == ["doc"] and setup["entities"] == ("doc", "ver", [], [])
+
+
+class TestDocumentTopics:
+    @pytest.fixture
+    def topics(self, setup, monkeypatch):
+        calls = []
+
+        async def extract(document, existing):
+            calls.append((document["document_id"], list(existing)))
+            return setup.get("next_topics", ["연차"])
+
+        monkeypatch.setattr(indexing, "extract_document_topics", extract)
+        return calls
+
+    def test_off_by_default_does_not_touch_table(self, setup, topics):
+        asyncio.run(indexing.index_document(DOCUMENT))
+        assert topics == [] and "topics" not in setup
+
+    def test_enabled_saves_topics_by_version(self, setup, topics, monkeypatch):
+        monkeypatch.setenv("DOCUMENT_TOPICS_ENABLED", "true")
+        known = ["보안"]
+        asyncio.run(indexing.index_document(DOCUMENT, known_topics=known))
+        assert topics == [("doc", ["보안"])] and setup["topics"] == [("ver", ["연차"])]
+        assert known == ["보안", "연차"]
+
+    def test_failure_keeps_existing_topics(self, setup, topics, monkeypatch):
+        monkeypatch.setenv("DOCUMENT_TOPICS_ENABLED", "true")
+        setup["next_topics"] = None
+        asyncio.run(indexing.index_document(DOCUMENT))
+        assert "topics" not in setup
+
+    def test_empty_topics_replace_existing(self, setup, topics, monkeypatch):
+        monkeypatch.setenv("DOCUMENT_TOPICS_ENABLED", "true")
+        setup["next_topics"] = []
+        asyncio.run(indexing.index_document(DOCUMENT))
+        assert setup["topics"] == [("ver", [])]
