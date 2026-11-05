@@ -12,6 +12,7 @@ DEFAULT_EMBEDDING_DIMENSIONS = 1024
 DEFAULT_MAX_CONVERSATIONS = 1000
 DEFAULT_CONVERSATION_TTL_SECONDS = 3600
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
+DEFAULT_DB_POOL_MAX_SIZE = 10
 
 
 def is_production() -> bool:
@@ -138,6 +139,10 @@ def conversation_ttl_seconds() -> int:
 
 def request_timeout_seconds() -> int:
     return _positive_int("REQUEST_TIMEOUT_SECONDS", DEFAULT_REQUEST_TIMEOUT_SECONDS)
+
+
+def db_pool_max_size() -> int:
+    return _positive_int("DB_POOL_MAX_SIZE", DEFAULT_DB_POOL_MAX_SIZE)
 
 
 def database_url() -> str | None:
