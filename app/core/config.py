@@ -69,6 +69,16 @@ def entity_extraction_enabled() -> bool:
     return os.getenv("ENTITY_EXTRACTION_ENABLED", "").strip().lower() == "true"
 
 
+def graph_search_enabled() -> bool:
+    """Neo4j를 질문 검색에도 쓸지 정한다. 주제 간선만 쓸 때는 끈다."""
+    return os.getenv("GRAPH_SEARCH_ENABLED", "").strip().lower() == "true"
+
+
+def document_topics_enabled() -> bool:
+    """켜면 적재할 때 문서마다 앞부분을 LLM으로 보내 주제를 만든다."""
+    return os.getenv("DOCUMENT_TOPICS_ENABLED", "").strip().lower() == "true"
+
+
 def neo4j_database() -> str | None:
     return os.getenv("NEO4J_DATABASE") or None
 

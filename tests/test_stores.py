@@ -282,6 +282,20 @@ class TestPostgresVectorStore:
     def test_fetch_accessible_without_ids_or_scope_does_not_connect(self, ids, scope):
         assert asyncio.run(stores.PostgresVectorStore("x").fetch_accessible(ids, scope)) == []
 
+    def test_replace_document_topics_calls_server_function(self, connect):
+        connection = FakeConnection()
+        connect(connection)
+        asyncio.run(stores.PostgresVectorStore("x").replace_document_topics("v1", ["연차", "인사"]))
+        assert (stores.REPLACE_TOPICS_SQL, ("v1", ["연차", "인사"])) in connection.executed
+        assert "replace_document_topics(%s::uuid, %s::text[])" in stores.REPLACE_TOPICS_SQL
+
+    def test_replace_document_topics_failure_propagates(self, connect):
+        connection = FakeConnection(fail_on="SELECT replace_document_topics")
+        connect(connection)
+        with pytest.raises(RuntimeError):
+            asyncio.run(stores.PostgresVectorStore("x").replace_document_topics("v1", ["연차"]))
+        assert connection.exit_error is RuntimeError
+
     def test_no_scope_returns_nothing_without_connecting(self):
         assert asyncio.run(stores.PostgresVectorStore("x").search([1.0], 1, None)) == []
 

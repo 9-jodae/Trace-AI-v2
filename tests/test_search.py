@@ -455,3 +455,22 @@ class TestEntityChunks:
         asyncio.run(service.search("재무팀 담당", None, SCOPE))
         assert vector.filter_calls[-1][0] == ["chunk-a"] and vector.document_calls == []
 
+
+class TestGraphSearchSwitch:
+    @pytest.fixture
+    def neo4j(self, stores, monkeypatch):
+        vector = FakeStore([])
+        graph = FakeStore([chunk("g")])
+        stores(vector, graph)
+        monkeypatch.setattr(service, "Neo4jGraphStore", FakeStore)
+        return graph
+
+    def test_neo4j_is_not_searched_by_default(self, neo4j):
+        asyncio.run(service.search("질문", None, SCOPE))
+        assert neo4j.calls == []
+
+    def test_neo4j_is_searched_when_enabled(self, neo4j, monkeypatch):
+        monkeypatch.setenv("GRAPH_SEARCH_ENABLED", "true")
+        asyncio.run(service.search("질문", None, SCOPE))
+        assert len(neo4j.calls) == 1
+

@@ -35,6 +35,9 @@ def setup(monkeypatch):
             state["vector"].append((version_id, chunks, embeddings))
             return state["stored"]
 
+        async def replace_document_topics(self, version_id, topics):
+            state.setdefault("topics", []).append((version_id, topics))
+
     class Graph:
         async def replace_document(self, document_id, source, names, chunks):
             state["graph"].append((document_id, source, names, chunks))
@@ -224,3 +227,38 @@ class TestEntityExtractionSwitch:
         asyncio.run(indexing.index_document(DOCUMENT))
         assert extraction == ["doc"] and setup["entities"] == ("doc", "ver", [], [])
 
+
+class TestDocumentTopics:
+    @pytest.fixture
+    def topics(self, setup, monkeypatch):
+        calls = []
+
+        async def extract(document, existing):
+            calls.append((document["document_id"], list(existing)))
+            return setup.get("next_topics", ["연차"])
+
+        monkeypatch.setattr(indexing, "extract_document_topics", extract)
+        return calls
+
+    def test_off_by_default_does_not_touch_table(self, setup, topics):
+        asyncio.run(indexing.index_document(DOCUMENT))
+        assert topics == [] and "topics" not in setup
+
+    def test_enabled_saves_topics_by_version(self, setup, topics, monkeypatch):
+        monkeypatch.setenv("DOCUMENT_TOPICS_ENABLED", "true")
+        known = ["보안"]
+        asyncio.run(indexing.index_document(DOCUMENT, known_topics=known))
+        assert topics == [("doc", ["보안"])] and setup["topics"] == [("ver", ["연차"])]
+        assert known == ["보안", "연차"]
+
+    def test_failure_keeps_existing_topics(self, setup, topics, monkeypatch):
+        monkeypatch.setenv("DOCUMENT_TOPICS_ENABLED", "true")
+        setup["next_topics"] = None
+        asyncio.run(indexing.index_document(DOCUMENT))
+        assert "topics" not in setup
+
+    def test_empty_topics_replace_existing(self, setup, topics, monkeypatch):
+        monkeypatch.setenv("DOCUMENT_TOPICS_ENABLED", "true")
+        setup["next_topics"] = []
+        asyncio.run(indexing.index_document(DOCUMENT))
+        assert setup["topics"] == [("ver", [])]
