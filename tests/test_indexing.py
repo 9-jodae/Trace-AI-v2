@@ -50,7 +50,7 @@ def setup(monkeypatch):
             return state["catalog"]
 
         async def replace_entity_graph(self, document_id, version_id, mentions, assertions):
-            state["entities"] = (document_id, version_id)
+            state["entities"] = (document_id, version_id, mentions, assertions)
 
     async def close():
         state["closed"] += 1
@@ -216,10 +216,11 @@ class TestEntityExtractionSwitch:
 
     def test_is_off_by_default(self, setup, extraction):
         asyncio.run(indexing.index_document(DOCUMENT))
-        assert extraction == [] and "entities" not in setup
+        # 이전에 저장한 관계를 지우도록 빈 값으로 교체한다
+        assert extraction == [] and setup["entities"] == ("doc", "ver", [], [])
 
     def test_runs_when_enabled(self, setup, extraction, monkeypatch):
         monkeypatch.setenv("ENTITY_EXTRACTION_ENABLED", "true")
         asyncio.run(indexing.index_document(DOCUMENT))
-        assert extraction == ["doc"] and setup["entities"] == ("doc", "ver")
+        assert extraction == ["doc"] and setup["entities"] == ("doc", "ver", [], [])
 
