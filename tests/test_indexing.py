@@ -52,6 +52,12 @@ def setup(monkeypatch):
         async def replace_entity_graph(self, document_id, version_id, mentions, assertions):
             state["entities"] = (document_id, version_id, mentions, assertions)
 
+        async def list_topics(self):
+            return state.setdefault("known_topics", [])
+
+        async def replace_document_topics(self, document_id, topics):
+            state["topics"] = (document_id, topics)
+
     async def close():
         state["closed"] += 1
 
@@ -223,4 +229,28 @@ class TestEntityExtractionSwitch:
         monkeypatch.setenv("ENTITY_EXTRACTION_ENABLED", "true")
         asyncio.run(indexing.index_document(DOCUMENT))
         assert extraction == ["doc"] and setup["entities"] == ("doc", "ver", [], [])
+
+
+class TestDocumentTopicSwitch:
+    @pytest.fixture
+    def topics(self, setup, monkeypatch):
+        calls = []
+
+        async def extract(document, existing):
+            calls.append((document["document_id"], existing))
+            return ["연차"]
+
+        monkeypatch.setattr(indexing, "Neo4jGraphStore", object)
+        monkeypatch.setattr(indexing, "extract_document_topics", extract)
+        return calls
+
+    def test_off_by_default_clears_topics(self, setup, topics):
+        asyncio.run(indexing.index_document(DOCUMENT))
+        assert topics == [] and setup["topics"] == ("doc", [])
+
+    def test_enabled_saves_topics(self, setup, topics, monkeypatch):
+        monkeypatch.setenv("DOCUMENT_TOPICS_ENABLED", "true")
+        setup["known_topics"] = ["보안"]
+        asyncio.run(indexing.index_document(DOCUMENT))
+        assert topics == [("doc", ["보안"])] and setup["topics"] == ("doc", ["연차"])
 

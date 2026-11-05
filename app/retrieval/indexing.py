@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.core import config
 from app.retrieval.chunking import chunk_document
+from app.retrieval.document_topics import extract_document_topics
 from app.retrieval.embedding import embed_documents
 from app.retrieval.entity_extraction import extract_entity_graph
 from app.retrieval.neo4j_store import Neo4jGraphStore
@@ -58,6 +59,12 @@ async def index_document(
                 document["document_id"], document["version_id"], chunks
             )
         await graph_store.replace_entity_graph(document["document_id"], document["version_id"], mentions, assertions)
+    if isinstance(graph_store, Neo4jGraphStore):
+        # 꺼져 있어도 교체해, 켰을 때 저장한 주제가 남지 않게 한다
+        topics = []
+        if config.document_topics_enabled():
+            topics = await extract_document_topics(document, await graph_store.list_topics())
+        await graph_store.replace_document_topics(document["document_id"], topics)
     if update_references:
         catalog = reference_catalog or await _reference_catalog(graph_store)
         await _replace_document_references(graph_store, document, chunks, catalog)
