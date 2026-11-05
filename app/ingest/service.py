@@ -5,6 +5,7 @@ import httpx
 
 from app.core import config
 from app.core.errors import describe_exception
+from app.ingest.document_type import classify_document_type
 from app.ingest.extraction import UnsupportedDocumentError, extract_text
 from app.ingest.schemas import IngestRequest
 from app.ingest.storage import read_object
@@ -22,11 +23,16 @@ class IngestFailure(Exception):
     """콜백으로 보내도 되는 고정 문구만 담는다. 예외 원문이나 본문은 넣지 않는다."""
 
 
-async def send_result(job_id: str, status: str, error_message: str | None = None) -> None:
+async def send_result(
+    job_id: str, status: str, error_message: str | None = None, document_type: str | None = None
+) -> None:
     # 콜백이 끝내 실패하면 작업은 Spring에서 PENDING이나 PROCESSING으로 남고, Spring 복구 작업이 다시 제출한다
     url = f"{config.spring_internal_url()}/api/internal/ingestion-jobs/{job_id}/result"
     headers = {"X-Internal-Secret": config.internal_secret() or ""}
     body = {"status": status, "errorMessage": error_message}
+    if document_type:
+        # 보내지 않으면 Spring은 기존 유형을 그대로 둔다
+        body["documentType"] = document_type
     for attempt in range(1, CALLBACK_ATTEMPTS + 1):
         try:
             async with httpx.AsyncClient(timeout=CALLBACK_TIMEOUT_SECONDS) as client:
@@ -39,14 +45,14 @@ async def send_result(job_id: str, status: str, error_message: str | None = None
                 await asyncio.sleep(CALLBACK_RETRY_SECONDS)
 
 
-async def _index(request: IngestRequest) -> int:
+async def _index(request: IngestRequest) -> tuple[int, str | None]:
     vector_store, _ = get_real_stores()
     version_id = str(request.version_id)
     info = await vector_store.current_version_document(version_id)
     if info is None:
         # 그사이 새 버전이 저장됐거나 삭제됐다. 처리할 것이 없으므로 실패가 아니다
         logger.info("Ingest skipped: not the current version")
-        return 0
+        return 0, None
     try:
         data = await read_object(request.storage_key)
     except Exception as exc:
@@ -65,14 +71,16 @@ async def _index(request: IngestRequest) -> int:
         {"document_id": info["document_id"], "version_id": version_id, "text": text, "source": info["title"]},
         reuse_embeddings=True,
     )
-    return len(chunks)
+    if not chunks or not config.document_type_enabled():
+        return len(chunks), None
+    return len(chunks), await classify_document_type(info["title"], text)
 
 
 async def process_ingest(request: IngestRequest) -> None:
     job_id = str(request.job_id)
     await send_result(job_id, "PROCESSING")
     try:
-        count = await _index(request)
+        count, document_type = await _index(request)
     except IngestFailure as exc:
         logger.warning("Ingest failed: job=%s", job_id)
         await send_result(job_id, "FAILED", str(exc))
@@ -80,5 +88,5 @@ async def process_ingest(request: IngestRequest) -> None:
         logger.error("Ingest failed: job=%s %s", job_id, describe_exception(exc))
         await send_result(job_id, "FAILED", "문서를 처리하지 못했습니다.")
     else:
-        logger.info("Ingest finished: job=%s chunks=%d", job_id, count)
-        await send_result(job_id, "DONE")
+        logger.info("Ingest finished: job=%s chunks=%d type=%s", job_id, count, document_type)
+        await send_result(job_id, "DONE", document_type=document_type)

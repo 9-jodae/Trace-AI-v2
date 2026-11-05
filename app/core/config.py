@@ -79,6 +79,11 @@ def document_topics_enabled() -> bool:
     return os.getenv("DOCUMENT_TOPICS_ENABLED", "").strip().lower() == "true"
 
 
+def document_type_enabled() -> bool:
+    """켜면 적재할 때 문서마다 앞부분을 LLM으로 보내 유형을 정하고 Spring 콜백에 담는다."""
+    return os.getenv("DOCUMENT_TYPE_ENABLED", "").strip().lower() == "true"
+
+
 def neo4j_database() -> str | None:
     return os.getenv("NEO4J_DATABASE") or None
 
