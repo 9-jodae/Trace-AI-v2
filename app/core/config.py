@@ -74,6 +74,11 @@ def graph_search_enabled() -> bool:
     return os.getenv("GRAPH_SEARCH_ENABLED", "").strip().lower() != "false"
 
 
+def edit_proposals_enabled() -> bool:
+    """켜면 수정 요청에 수정안을 만든다. 끄면 수정은 지원하지 않는다고 답하고 관련 값과 충돌만 알린다."""
+    return os.getenv("EDIT_PROPOSALS_ENABLED", "").strip().lower() == "true"
+
+
 def document_topics_enabled() -> bool:
     """켜면 적재할 때 문서마다 앞부분을 LLM으로 보내 주제를 만든다."""
     return os.getenv("DOCUMENT_TOPICS_ENABLED", "").strip().lower() == "true"

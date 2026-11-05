@@ -149,8 +149,10 @@ async def judge_small_talk(state: AgentState) -> dict:
     pattern_match = EDIT_REQUEST_PATTERN.search(question) is not None
     if not config.jev_api_key():
         return {"small_talk": False, "edit_request": pattern_match, "edit_proposals": []}
+    # 수정안을 만들지 않으면 직접 표현만 보고, 수정 판단용 JEV 호출을 쓰지 않는다
+    judge_edit = edit_request_probability(question) if config.edit_proposals_enabled() else _no_edit_judgement()
     small_talk_result, edit_result = await asyncio.gather(
-        small_talk_probability(question), edit_request_probability(question), return_exceptions=True
+        small_talk_probability(question), judge_edit, return_exceptions=True
     )
     # 판단하지 못하면 문서 검색으로 진행한다
     if isinstance(small_talk_result, Exception):
@@ -340,11 +342,17 @@ async def _alternate_search(state: AgentState) -> tuple[str, SearchResult] | Non
         return None
 
 
+async def _no_edit_judgement() -> float:
+    return 0.0
+
+
 async def _answer_with_documents(state: AgentState, context: list[Chunk], alternate_query: str | None) -> dict:
     original = state["messages"][-1].text
     question = f"{original}\n(같은 뜻의 다른 표기: {alternate_query})" if alternate_query else original
-    edit_request = state.get("edit_request", False)
-    extra = {"edit_request": True} if edit_request else {}
+    proposing = state.get("edit_request", False) and config.edit_proposals_enabled()
+    extra = {"edit_request": True} if proposing else {}
+    if state.get("edit_request") and not proposing:
+        extra["edit_unsupported"] = True
     if _is_conflict_scan(original):
         extra["conflict_scan"] = True
     registered = state.get("registered_conflicts") or []
@@ -370,8 +378,8 @@ async def _answer_with_documents(state: AgentState, context: list[Chunk], altern
     refused = answer == NO_EVIDENCE_ANSWER
     answer_type = "CLARIFICATION" if clarification else "NO_EVIDENCE" if refused else "ANSWER"
     refuse_or_ask = clarification or refused
-    edits = parse_edit_proposals(response, context) if edit_request and not refuse_or_ask else []
-    if edit_request and not refuse_or_ask:
+    edits = parse_edit_proposals(response, context) if proposing and not refuse_or_ask else []
+    if proposing and not refuse_or_ask:
         # 원문과 맞춰 본 제안만 답변에 붙여, 화면에 카드가 없어도 바꿀 문장을 바로 볼 수 있게 한다
         answer = f"{answer}\n\n{describe_edits(edits)}"
         message = AIMessage(content=answer)

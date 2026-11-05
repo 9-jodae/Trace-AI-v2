@@ -13,6 +13,11 @@ EDIT_CHUNK = {**chunk("c1", f"앞 문장. {BEFORE} 뒤 문장."), "source": "연
 OTHERS = [chunk(f"n{number}", f"무관한 문서 {number}") for number in range(1, 8)]
 
 
+@pytest.fixture(autouse=True)
+def proposals_enabled(monkeypatch):
+    monkeypatch.setenv("EDIT_PROPOSALS_ENABLED", "true")
+
+
 def state(text="5일로 수정해줘", **values):
     return {"messages": [HumanMessage(content=text)], **values}
 
