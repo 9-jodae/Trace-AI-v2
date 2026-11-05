@@ -259,10 +259,23 @@ def _search_query(state: AgentState) -> str:
 
 async def retrieve(state: AgentState) -> dict:
     update = await _with_previous_context(state, await _search_documents(state))
-    known = state.get("known_conflicts")
-    if not known or not _is_conflict_scan(state["messages"][-1].text):
+    known = state.get("known_conflicts") or []
+    if not _is_conflict_scan(state["messages"][-1].text):
         return update
-    found = await fetch_known_conflicts(known, state.get("filters"), state.get("access_scope"))
+    found = (
+        await fetch_known_conflicts(known, state.get("filters"), state.get("access_scope"))
+        if known
+        else {"chunks": [], "conflicts": []}
+    )
+    # Spring이 보낸 수와 근거로 쓴 수만 남긴다. 항목과 문서는 남기지 않는다
+    logger.info(
+        "Known conflicts: received=%d used=%d filtered=%s",
+        len(known),
+        len(found["conflicts"]),
+        state.get("filters") is not None,
+    )
+    if not known:
+        return update
     # 등록 충돌의 근거를 앞에 두고, 같은 청크는 한 번만 넣는다
     present = {chunk["id"] for chunk in found["chunks"]}
     others = [chunk for chunk in update["context"] if chunk["id"] not in present]
@@ -334,10 +347,14 @@ async def _answer_with_documents(state: AgentState, context: list[Chunk], altern
     extra = {"edit_request": True} if edit_request else {}
     if _is_conflict_scan(original):
         extra["conflict_scan"] = True
-    registered = state.get("registered_conflicts")
+    registered = state.get("registered_conflicts") or []
     if registered:
         extra["registered_conflicts"] = registered
-        extra["registered_partial"] = len(registered) < len(state.get("known_conflicts") or [])
+    known = state.get("known_conflicts") or []
+    if extra.get("conflict_scan") and len(registered) < len(known):
+        # 필터나 상한 때문에 빠진 등록 충돌이 있으면 "찾지 못했다"로만 끝나지 않게 알린다
+        extra["skipped_conflicts"] = len(known) - len(registered)
+        extra["filters_applied"] = state.get("filters") is not None
     response = await generate_answer(question, context, _history(state), **extra)
     try:
         answer, evidence, clarification, keywords = parse_answer(response, context)
