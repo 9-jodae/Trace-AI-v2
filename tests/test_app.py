@@ -95,6 +95,7 @@ class TestProjectFiles:
             "langchain==",
             "langchain-text-splitters",
             "psycopg",
+            "psycopg-pool",
             "neo4j",
             "langchain-aws",
             "typesafe-sdk",

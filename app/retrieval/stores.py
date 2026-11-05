@@ -1,10 +1,12 @@
+import asyncio
 import math
 import re
 from typing import Protocol
 
-import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
+from app.core import config
 from app.core.schemas import AccessScope, SearchFilters
 from app.retrieval.embedding import embed_documents
 from app.retrieval.schemas import Chunk
@@ -43,7 +45,11 @@ SELECT c.id::text AS id
 FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
 WHERE c.id = ANY(%s::uuid[])
 """
+SET_STATEMENT_TIMEOUT_SQL = "SELECT set_config('statement_timeout', %s, true)"
 CONNECT_TIMEOUT_SECONDS = 5
+# 연결이 모두 사용 중이면 이 시간까지 기다린 뒤 실패한다
+POOL_WAIT_SECONDS = 5
+POOL_MIN_SIZE = 1
 SEARCH_STATEMENT_TIMEOUT_MS = 5_000
 WRITE_STATEMENT_TIMEOUT_MS = 60_000
 DELETE_VERSION_SQL = "DELETE FROM chunks WHERE document_version_id = %s"
@@ -116,17 +122,41 @@ def _cosine(a: list[float], b: list[float]) -> float:
 class PostgresVectorStore:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
+        self._pool: AsyncConnectionPool | None = None
+        self._pool_lock = asyncio.Lock()
 
     async def close(self) -> None:
-        pass
+        if self._pool is not None:
+            await self._pool.close()
+            self._pool = None
+
+    async def _get_pool(self) -> AsyncConnectionPool:
+        # 이벤트 루프 안에서 열어야 하므로 첫 사용 때 만든다. 실패하면 다음 요청이 다시 시도한다
+        async with self._pool_lock:
+            if self._pool is None:
+                pool = AsyncConnectionPool(
+                    self._database_url,
+                    min_size=POOL_MIN_SIZE,
+                    max_size=config.db_pool_max_size(),
+                    timeout=POOL_WAIT_SECONDS,
+                    open=False,
+                    # DB 재시작 뒤 끊어진 연결을 요청에 내주지 않는다
+                    check=AsyncConnectionPool.check_connection,
+                    kwargs={"row_factory": dict_row, "connect_timeout": CONNECT_TIMEOUT_SECONDS},
+                )
+                try:
+                    await pool.open(wait=True, timeout=CONNECT_TIMEOUT_SECONDS)
+                except Exception:
+                    await pool.close()
+                    raise
+                self._pool = pool
+            return self._pool
 
     async def _read(self, sql: str, params: tuple) -> list[dict]:
-        async with await psycopg.AsyncConnection.connect(
-            self._database_url,
-            row_factory=dict_row,
-            connect_timeout=CONNECT_TIMEOUT_SECONDS,
-            options=f"-c statement_timeout={SEARCH_STATEMENT_TIMEOUT_MS}",
-        ) as connection:
+        pool = await self._get_pool()
+        async with pool.connection() as connection:
+            # 트랜잭션 안에서만 적용되어 연결을 돌려줄 때 제한이 남지 않는다
+            await connection.execute(SET_STATEMENT_TIMEOUT_SQL, (str(SEARCH_STATEMENT_TIMEOUT_MS),))
             cursor = await connection.execute(sql, params)
             return await cursor.fetchall()
 
@@ -159,11 +189,9 @@ class PostgresVectorStore:
     async def replace_version(self, version_id: str, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
         # 재색인 시 줄어든 청크가 남지 않도록 같은 버전의 청크를 한 트랜잭션에서 교체한다
         pairs = list(zip(chunks, embeddings, strict=True))
-        async with await psycopg.AsyncConnection.connect(
-            self._database_url,
-            connect_timeout=CONNECT_TIMEOUT_SECONDS,
-            options=f"-c statement_timeout={WRITE_STATEMENT_TIMEOUT_MS}",
-        ) as connection:
+        pool = await self._get_pool()
+        async with pool.connection() as connection:
+            await connection.execute(SET_STATEMENT_TIMEOUT_SQL, (str(WRITE_STATEMENT_TIMEOUT_MS),))
             await connection.execute(DELETE_VERSION_SQL, (version_id,))
             async with connection.cursor() as cursor:
                 await cursor.executemany(
