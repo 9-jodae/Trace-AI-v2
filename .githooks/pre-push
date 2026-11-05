@@ -1,0 +1,26 @@
+#!/bin/sh
+
+zero=0000000000000000000000000000000000000000
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    case "$remote_ref" in
+        refs/heads/*) ;;
+        *) continue ;;
+    esac
+
+    if [ "$local_sha" = "$zero" ]; then
+        echo "푸시 거부: 원격 브랜치를 삭제할 수 없습니다. Merge instead of rebasing." >&2
+        exit 1
+    fi
+
+    if [ "$remote_sha" = "$zero" ]; then
+        continue
+    fi
+
+    if ! git merge-base --is-ancestor "$remote_sha" "$local_sha"; then
+        echo "푸시 거부: $remote_ref 업데이트가 non-fast-forward입니다. Merge instead of rebasing." >&2
+        exit 1
+    fi
+done
+
+exit 0
