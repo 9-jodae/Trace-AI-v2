@@ -208,7 +208,13 @@ async def _answer_with_documents(state: AgentState, context: list[Chunk], altern
     edit_request = state.get("edit_request", False)
     extra = {"edit_request": True} if edit_request else {}
     response = await generate_answer(question, context, _history(state), **extra)
-    answer, evidence, clarification, keywords = parse_answer(response, context)
+    try:
+        answer, evidence, clarification, keywords = parse_answer(response, context)
+    except AiUnavailableError:
+        # 호출마다 다르게 생성되므로 형식이 깨졌을 때만 한 번 더 만든다. 또 깨지면 오류로 끝낸다
+        logger.warning("LLM answer retry: malformed response")
+        response = await generate_answer(question, context, _history(state), **extra)
+        answer, evidence, clarification, keywords = parse_answer(response, context)
     # 두 번 연달아 되묻지 않는다. 모델이 어기면 일반 답변으로 내보낸다
     clarification = clarification and not _follows_clarification(state)
     # 다음 턴의 대화 기록에는 JSON이 아니라 답변만 남긴다

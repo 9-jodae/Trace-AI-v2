@@ -6,6 +6,8 @@ from conftest import chunk
 from app.agent import graph
 from app.agent.evidence import ground_edits, parse_edit_proposals
 from app.core import config
+from app.core.errors import AiUnavailableError
+from app.llm.client import EDIT_REQUEST_INSTRUCTION, SYSTEM_PROMPT
 
 BEFORE = "이월은 최대 7일이다."
 TEXT = f"앞 문장이다. {BEFORE} 뒤 문장이다."
@@ -49,11 +51,11 @@ class TestGroundEdits:
         assert ground_edits([edit()], context) == []
 
     def test_duplicates_and_limit(self):
-        text = " ".join(f"문장{index}이다." for index in range(7))
+        text = " ".join(f"문장{index}이다." for index in range(9))
         context = [{**CONTEXT[0], "text": text}]
-        edits = [edit(before=f"문장{index}이다.", after="바꿈") for index in range(7)]
+        edits = [edit(before=f"문장{index}이다.", after="바꿈") for index in range(9)]
         assert len(ground_edits([edits[0], edits[0]], context)) == 1
-        assert len(ground_edits(edits, context)) == 5
+        assert len(ground_edits(edits, context)) == 8
 
 
 def test_parse_reads_edits_from_answer():
@@ -147,3 +149,35 @@ class TestGraph:
         answer(json.dumps({"answer": "관련 문서를 찾지 못했습니다.", "edits": [edit()]}, ensure_ascii=False))
         result = await graph._answer_with_documents({**self.state(), "edit_request": True}, CONTEXT, None)
         assert result["edit_proposals"] == []
+
+
+class TestAnswerRetry:
+    @pytest.mark.anyio
+    async def test_malformed_answer_is_retried_once(self, monkeypatch):
+        calls = []
+
+        async def generate(question, context, history):
+            calls.append(question)
+            return '{"answer": "잘린' if len(calls) == 1 else '{"answer": "정상"}'
+
+        monkeypatch.setattr(graph, "generate_answer", generate)
+        result = await graph._answer_with_documents(TestGraph.state("질문"), CONTEXT, None)
+        assert len(calls) == 2 and result["messages"][0].content == "정상"
+
+    @pytest.mark.anyio
+    async def test_second_failure_raises(self, monkeypatch):
+        calls = []
+
+        async def generate(question, context, history):
+            calls.append(question)
+            return '{"answer": "잘린'
+
+        monkeypatch.setattr(graph, "generate_answer", generate)
+        with pytest.raises(AiUnavailableError):
+            await graph._answer_with_documents(TestGraph.state("질문"), CONTEXT, None)
+        assert len(calls) == 2
+
+
+def test_prompts_cover_counts_tables_and_quotes():
+    assert "전체 수는 알 수 없고" in SYSTEM_PROMPT and '\\"' in SYSTEM_PROMPT
+    assert "표는 그 행 전체" in EDIT_REQUEST_INSTRUCTION and "설명 문장" in EDIT_REQUEST_INSTRUCTION
