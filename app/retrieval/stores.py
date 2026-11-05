@@ -1,4 +1,5 @@
 import asyncio
+import json
 import math
 import re
 from typing import Protocol
@@ -106,6 +107,20 @@ WHERE dv.id = %s::uuid AND dv.version_number = d.current_version AND d.deleted_a
 """
 DELETE_VERSION_SQL = "DELETE FROM chunks WHERE document_version_id = %s"
 # ai_app은 테이블을 직접 읽거나 쓰지 못하고 이 함수만 실행한다 (docs199-Server V15)
+CURRENT_VERSION_DOCUMENT_SQL = """
+SELECT d.id::text AS document_id, d.title
+FROM document_versions dv
+JOIN documents d ON d.id = dv.document_id
+WHERE dv.id = %s::uuid AND dv.version_number = d.current_version AND d.deleted_at IS NULL
+"""
+# 이전 버전에서 내용이 같은 청크의 임베딩을 찾는다. 다른 문서는 보지 않는다
+EMBEDDINGS_BY_HASH_SQL = """
+SELECT DISTINCT ON (c.content_hash) c.content_hash, c.embedding::text AS embedding
+FROM chunks c
+JOIN document_versions dv ON dv.id = c.document_version_id
+WHERE dv.document_id = %s::uuid AND c.content_hash = ANY(%s) AND c.embedding IS NOT NULL
+ORDER BY c.content_hash, dv.version_number DESC
+"""
 REPLACE_TOPICS_SQL = "SELECT replace_document_topics(%s::uuid, %s::text[])"
 INSERT_CHUNK_SQL = """
 INSERT INTO chunks (id, document_version_id, chunk_index, content, char_start, char_end, content_hash, embedding)
@@ -133,6 +148,10 @@ def build_fulltext_query(text: str) -> str:
 
 
 class VectorStore(Protocol):
+    async def current_version_document(self, version_id: str) -> dict | None: ...
+
+    async def embeddings_by_hash(self, document_id: str, hashes: list[str]) -> dict[str, list[float]]: ...
+
     async def replace_document_topics(self, version_id: str, topics: list[str]) -> None: ...
 
     async def search(
@@ -322,6 +341,14 @@ class PostgresVectorStore:
 
     async def is_current_version(self, version_id: str) -> bool:
         return bool(await self._read(IS_CURRENT_VERSION_SQL, (version_id,)))
+
+    async def current_version_document(self, version_id: str) -> dict | None:
+        rows = await self._read(CURRENT_VERSION_DOCUMENT_SQL, (version_id,))
+        return rows[0] if rows else None
+
+    async def embeddings_by_hash(self, document_id: str, hashes: list[str]) -> dict[str, list[float]]:
+        rows = await self._read(EMBEDDINGS_BY_HASH_SQL, (document_id, hashes))
+        return {row["content_hash"]: json.loads(row["embedding"]) for row in rows}
 
     async def replace_document_topics(self, version_id: str, topics: list[str]) -> None:
         pool = await self._get_pool()
