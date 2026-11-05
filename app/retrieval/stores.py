@@ -53,6 +53,12 @@ POOL_WAIT_SECONDS = 5
 POOL_MIN_SIZE = 1
 SEARCH_STATEMENT_TIMEOUT_MS = 5_000
 WRITE_STATEMENT_TIMEOUT_MS = 60_000
+IS_CURRENT_VERSION_SQL = """
+SELECT 1 AS current
+FROM document_versions dv
+JOIN documents d ON d.id = dv.document_id
+WHERE dv.id = %s::uuid AND dv.version_number = d.current_version AND d.deleted_at IS NULL
+"""
 DELETE_VERSION_SQL = "DELETE FROM chunks WHERE document_version_id = %s"
 INSERT_CHUNK_SQL = """
 INSERT INTO chunks (id, document_version_id, chunk_index, content, char_start, char_end, content_hash, embedding)
@@ -191,12 +197,19 @@ class PostgresVectorStore:
             rows = await self._read(FILTER_ACCESSIBLE_WITH_FILTERS_SQL, (*scope, *_filter_params(filters), chunk_ids))
         return {row["id"] for row in rows}
 
-    async def replace_version(self, version_id: str, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
+    async def is_current_version(self, version_id: str) -> bool:
+        return bool(await self._read(IS_CURRENT_VERSION_SQL, (version_id,)))
+
+    async def replace_version(self, version_id: str, chunks: list[Chunk], embeddings: list[list[float]]) -> bool:
         # 재색인 시 줄어든 청크가 남지 않도록 같은 버전의 청크를 한 트랜잭션에서 교체한다
+        # 늦게 끝난 구버전 작업이 이전 청크를 되살리지 않도록 쓰기 직전에 현재 버전인지 확인한다
         pairs = list(zip(chunks, embeddings, strict=True))
         pool = await self._get_pool()
         async with pool.connection() as connection:
             await connection.execute(SET_STATEMENT_TIMEOUT_SQL, (str(WRITE_STATEMENT_TIMEOUT_MS),))
+            current = await connection.execute(IS_CURRENT_VERSION_SQL, (version_id,))
+            if await current.fetchone() is None:
+                return False
             await connection.execute(DELETE_VERSION_SQL, (version_id,))
             async with connection.cursor() as cursor:
                 await cursor.executemany(
@@ -215,6 +228,7 @@ class PostgresVectorStore:
                         for chunk, embedding in pairs
                     ],
                 )
+        return True
 
 
 class NoGraphStore:
