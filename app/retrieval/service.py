@@ -41,6 +41,9 @@ def _sample_stores() -> tuple[VectorStore, GraphStore]:
 
 @cache
 def _real_stores(database_url: str, neo4j_settings: tuple | None) -> tuple[VectorStore, GraphStore]:
+    if not neo4j_settings:
+        # 설정 누락과 구분할 수 있도록 저장소를 만들 때 한 번 남긴다
+        logger.warning("Graph search disabled: NEO4J_URI is not set")
     graph_store = Neo4jGraphStore.from_uri(*neo4j_settings) if neo4j_settings else NoGraphStore()
     return PostgresVectorStore(database_url), graph_store
 

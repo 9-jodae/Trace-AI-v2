@@ -175,11 +175,12 @@ class TestRealStoreSelection:
         with pytest.raises(AiUnavailableError):
             service.get_stores()
 
-    def test_missing_neo4j_uses_vector_only(self, monkeypatch):
+    def test_missing_neo4j_uses_vector_only(self, monkeypatch, caplog):
         monkeypatch.setenv("DATABASE_URL", "postgresql://db")
         vector, graph = service.get_stores()
         assert type(vector).__name__ == "PostgresVectorStore" and type(graph).__name__ == "NoGraphStore"
         assert asyncio.run(graph.search("질문", 3)) == []
+        assert "Graph search disabled" in caplog.text
 
     def test_neo4j_uri_without_password_fails(self, monkeypatch):
         monkeypatch.setenv("DATABASE_URL", "postgresql://db")
