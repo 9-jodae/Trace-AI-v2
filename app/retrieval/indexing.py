@@ -64,7 +64,9 @@ async def index_document(
         topics = []
         if config.document_topics_enabled():
             topics = await extract_document_topics(document, await graph_store.list_topics())
-        await graph_store.replace_document_topics(document["document_id"], topics)
+        # 일시적인 실패로 기존 주제를 지우지 않는다
+        if topics is not None:
+            await graph_store.replace_document_topics(document["document_id"], topics)
     if update_references:
         catalog = reference_catalog or await _reference_catalog(graph_store)
         await _replace_document_references(graph_store, document, chunks, catalog)

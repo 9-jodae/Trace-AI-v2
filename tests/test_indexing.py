@@ -231,6 +231,18 @@ class TestEntityExtractionSwitch:
         assert extraction == ["doc"] and setup["entities"] == ("doc", "ver", [], [])
 
 
+class TestDocumentTopicFailure:
+    def test_failure_keeps_existing_topics(self, setup, monkeypatch):
+        async def extract(document, existing):
+            return None
+
+        monkeypatch.setattr(indexing, "Neo4jGraphStore", object)
+        monkeypatch.setattr(indexing, "extract_document_topics", extract)
+        monkeypatch.setenv("DOCUMENT_TOPICS_ENABLED", "true")
+        asyncio.run(indexing.index_document(DOCUMENT))
+        assert "topics" not in setup
+
+
 class TestDocumentTopicSwitch:
     @pytest.fixture
     def topics(self, setup, monkeypatch):

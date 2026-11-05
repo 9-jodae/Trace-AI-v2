@@ -18,9 +18,9 @@ DOCUMENT = {"document_id": "d1", "version_id": "v1", "source": "전공 정리", 
         ('{"topics": ["공부", " 공부 ", "", 1, "길" ]}', ["공부", "길"]),
         (f'{{"topics": ["{"가" * 21}"]}}', []),
         ('{"topics": "공부"}', []),
-        ('{"other": []}', []),
-        ("설명만 있음", []),
-        ('{"topics": [', []),
+        ('{"other": []}', None),
+        ("설명만 있음", None),
+        ('{"topics": [', None),
     ],
 )
 def test_parse_topics(reply, expected):
@@ -39,12 +39,12 @@ def test_sends_only_the_beginning_and_existing_topics(monkeypatch):
     assert sent[0].count("가") == document_topics.MAX_INPUT_CHARACTERS and "전공" in sent[0]
 
 
-def test_llm_failure_returns_no_topics(monkeypatch):
+def test_llm_failure_returns_none(monkeypatch):
     async def fail(messages):
         raise AiUnavailableError("x")
 
     monkeypatch.setattr(document_topics, "generate_structured_response", fail)
-    assert asyncio.run(document_topics.extract_document_topics(DOCUMENT, [])) == []
+    assert asyncio.run(document_topics.extract_document_topics(DOCUMENT, [])) is None
 
 
 def test_edges_connect_documents_sharing_topics():

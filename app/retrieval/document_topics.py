@@ -26,20 +26,21 @@ TOPIC_PROMPT = f"""문서가 어떤 주제에 속하는지 정해 비슷한 문�
 {{"topics": ["주제"]}}"""
 
 
-def parse_topics(reply: str) -> list[str]:
-    # 모델이 코드 블록이나 설명을 덧붙여도 JSON만 읽는다. 응답 본문은 기록하지 않는다
+def parse_topics(reply: str) -> list[str] | None:
+    # 모델이 코드 블록이나 설명을 덧붙여도 JSON만 읽는다. 읽지 못하면 None이다. 응답 본문은 기록하지 않는다
     try:
         data, _ = json.JSONDecoder(strict=False).raw_decode(reply, reply.index("{"))
         raw = data["topics"]
     except (ValueError, KeyError, TypeError):
         logger.warning("Document topic parse failed: length=%d", len(reply))
-        return []
+        return None
     topics = [item.strip() for item in raw if isinstance(item, str)] if isinstance(raw, list) else []
     valid = [topic for topic in topics if 0 < len(topic) <= MAX_TOPIC_LENGTH]
     return list(dict.fromkeys(valid))[:MAX_TOPICS]
 
 
-async def extract_document_topics(document: DocumentInput, existing_topics: list[str]) -> list[str]:
+async def extract_document_topics(document: DocumentInput, existing_topics: list[str]) -> list[str] | None:
+    """주제를 만들지 못하면 None을 돌려준다. 호출자는 기존 주제를 지우지 않아야 한다."""
     payload = {
         "title": document["source"],
         "text": document["text"][:MAX_INPUT_CHARACTERS],
@@ -52,9 +53,9 @@ async def extract_document_topics(document: DocumentInput, existing_topics: list
     try:
         return parse_topics(await generate_structured_response(messages))
     except AiUnavailableError as exc:
-        # 주제가 없어도 문서 적재는 끝까지 진행한다
+        # 주제를 만들지 못해도 문서 적재는 끝까지 진행한다
         logger.warning("Document topic extraction failed: %s", type(exc).__name__)
-        return []
+        return None
 
 
 def shared_topic_edges(topics_by_document: dict[str, list[str]]) -> list[dict]:
@@ -75,11 +76,11 @@ async def preview(path: Path) -> None:
     for item in documents:
         document: DocumentInput = {
             "document_id": item["doc_id"],
-            "version_id": item["version_id"],
+            "version_id": item.get("version_id") or item["doc_id"],
             "text": item["text"],
             "source": item["title"],
         }
-        topics = await extract_document_topics(document, known)
+        topics = await extract_document_topics(document, known) or []
         topics_by_title[document["source"]] = topics
         known = list(dict.fromkeys([*known, *topics]))
         print(f"{document['source']}: {topics}")
