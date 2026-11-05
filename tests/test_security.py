@@ -50,6 +50,9 @@ class TestInternalSecret:
         assert response.json()["code"] == "UNAUTHORIZED"
         assert ai.search_calls == []
 
+    def test_topic_edges_require_secret(self, production):
+        assert production.get("/api/v1/agent/topic-edges").status_code == 401
+
     def test_rejects_before_validating_body(self, production):
         assert production.post(URL, json={}).status_code == 401
 

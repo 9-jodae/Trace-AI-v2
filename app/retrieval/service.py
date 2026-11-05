@@ -7,6 +7,7 @@ from typing_extensions import TypedDict
 from app.core import config
 from app.core.errors import AiUnavailableError, describe_exception
 from app.core.schemas import AccessScope, SearchFilters
+from app.retrieval.document_topics import shared_topic_edges
 from app.retrieval.embedding import embed_query
 from app.retrieval.fusion import rrf_fuse
 from app.retrieval.neo4j_store import Neo4jGraphStore
@@ -73,6 +74,12 @@ async def close_stores() -> None:
     _real_stores.cache_clear()
 
 
+async def list_topic_edges() -> list[dict]:
+    """주제 간선을 만든다. 권한은 보지 않으므로 호출한 Spring이 걸러야 한다."""
+    _, graph_store = get_stores()
+    return shared_topic_edges(await graph_store.list_document_topics())
+
+
 async def filter_accessible_context(chunks: list[Chunk], scope: AccessScope | None = None) -> list[Chunk]:
     # 이전 근거를 재사용하기 전에 권한 변경, 문서 삭제, 개정을 다시 확인한다
     vector_store, _ = get_stores()
@@ -98,6 +105,9 @@ async def search(
         return await vector_store.search(await query_embedding, SOURCE_LIMIT, scope, filters)
 
     async def search_graph() -> list[Chunk]:
+        # 주제 간선 때문에 Neo4j를 연결해도 측정 전에는 검색 결과를 바꾸지 않는다
+        if isinstance(graph_store, Neo4jGraphStore) and not config.graph_search_enabled():
+            return []
         # Neo4j 제목 매칭 결과를 먼저 PostgreSQL에서 허용된 현재 문서인지 확인한 뒤에만 관계를 확장한다.
         seed_ids = await graph_store.seed_documents(query)
         # 엔티티 경로는 청크 ID를 돌려주므로 문서 시작점에 섞지 않고 후보에 바로 넣는다

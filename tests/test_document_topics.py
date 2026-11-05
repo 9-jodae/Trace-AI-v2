@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from app.core.errors import AiUnavailableError
-from app.retrieval import document_topics
+from app.retrieval import document_topics, service
 from app.retrieval.document_topics import parse_topics, shared_topic_edges
 
 DOCUMENT = {"document_id": "d1", "version_id": "v1", "source": "전공 정리", "text": "가" * 3000}
@@ -49,4 +49,34 @@ def test_llm_failure_returns_none(monkeypatch):
 
 def test_edges_connect_documents_sharing_topics():
     edges = shared_topic_edges({"b": ["전공", "공부"], "a": ["공부", "전공"], "c": ["보안"], "d": []})
-    assert edges == [{"source": "a", "target": "b", "label": "공부 · 전공", "topics": ["공부", "전공"]}]
+    assert len(edges) == 1
+    edge = edges[0]
+    assert (edge["source"], edge["target"], edge["label"]) == ("a", "b", "공부 · 전공")
+    assert edge["topics"] == ["공부", "전공"]
+    # 입력 순서가 달라도 간선 ID는 같다
+    assert edge["id"] == shared_topic_edges({"a": ["공부"], "b": ["공부"]})[0]["id"]
+
+
+class TestTopicEdgesApi:
+    URL = "/api/v1/agent/topic-edges"
+    HEADERS = {"X-Internal-Secret": "test-internal-secret"}
+
+    def test_returns_shared_topic_edges(self, client, monkeypatch):
+        class Graph:
+            async def list_document_topics(self):
+                return {"a": ["공부", "전공"], "b": ["전공"], "c": ["보안"]}
+
+        monkeypatch.setattr(service, "get_stores", lambda: (None, Graph()))
+        body = client.get(self.URL, headers=self.HEADERS).json()
+        assert [(edge["source"], edge["target"], edge["type"]) for edge in body["edges"]] == [("a", "b", "TOPIC")]
+        assert body["edges"][0]["label"] == "전공" and body["edges"][0]["detail"] == {"topics": ["전공"]}
+
+    def test_store_failure_is_503_without_details(self, client, monkeypatch):
+        class Graph:
+            async def list_document_topics(self):
+                raise RuntimeError("bolt://secret")
+
+        monkeypatch.setattr(service, "get_stores", lambda: (None, Graph()))
+        response = client.get(self.URL, headers=self.HEADERS)
+        assert response.status_code == 503 and "secret" not in response.text
+

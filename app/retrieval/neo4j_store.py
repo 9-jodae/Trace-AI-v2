@@ -122,6 +122,10 @@ MERGE (r)-[:SUPPORTED_BY]->(c)
 """
 
 
+DOCUMENT_TOPICS_CYPHER = """
+MATCH (d:Document)-[:HAS_TOPIC]->(t:Topic)
+RETURN d.document_id AS document_id, collect(t.name) AS topics
+"""
 TOPIC_CATALOG_CYPHER = "MATCH (t:Topic) RETURN t.name AS name ORDER BY name"
 REPLACE_TOPICS_CYPHER = """
 MATCH (d:Document {document_id: $document_id})
@@ -217,6 +221,10 @@ class Neo4jGraphStore:
         rows = await self._read(ENTITY_MENTION_SEARCH_CYPHER, {"entity_ids": entity_ids, "limit": limit})
         mention_ids = [row["id"] for row in rows]
         return list(dict.fromkeys([*evidence_ids, *mention_ids]))[:limit]
+
+    async def list_document_topics(self) -> dict[str, list[str]]:
+        rows = await self._read(DOCUMENT_TOPICS_CYPHER, {})
+        return {row["document_id"]: row["topics"] for row in rows}
 
     async def list_topics(self) -> list[str]:
         return [row["name"] for row in await self._read(TOPIC_CATALOG_CYPHER, {})]
