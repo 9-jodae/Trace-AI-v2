@@ -10,7 +10,7 @@ from psycopg_pool import AsyncConnectionPool
 from app.core import config
 from app.core.schemas import AccessScope, SearchFilters
 from app.retrieval.embedding import embed_documents
-from app.retrieval.schemas import Chunk
+from app.retrieval.schemas import CatalogDocument, Chunk
 
 MAX_FULLTEXT_TERMS = 12
 # chunks.embedding 컬럼의 차원 (Trace-Server V11)
@@ -99,6 +99,15 @@ POOL_WAIT_SECONDS = 5
 POOL_MIN_SIZE = 1
 SEARCH_STATEMENT_TIMEOUT_MS = 5_000
 WRITE_STATEMENT_TIMEOUT_MS = 60_000
+# 검색에 쓸 수 있는 현재 버전 문서와 청크 수. 권한과 필터, 삭제와 이전 버전 제외는 accessible_chunks가 판단한다
+ACCESSIBLE_DOCUMENTS_SQL = """
+SELECT d.id::text AS id, d.title, d.document_type, count(*)::int AS chunk_count
+FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
+JOIN document_versions dv ON dv.id = c.document_version_id
+JOIN documents d ON d.id = dv.document_id
+GROUP BY d.id, d.title, d.document_type
+ORDER BY d.title
+"""
 IS_CURRENT_VERSION_SQL = """
 SELECT 1 AS current
 FROM document_versions dv
@@ -186,6 +195,10 @@ class VectorStore(Protocol):
         embedding: list[float],
         limit: int,
     ) -> list[Chunk]: ...
+
+    async def accessible_documents(
+        self, scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> list[CatalogDocument]: ...
 
 
 class GraphStore(Protocol):
@@ -339,6 +352,13 @@ class PostgresVectorStore:
         params = (*scope, *_filter_params(filters), chunk_ids, _to_vector(embedding), limit)
         return await self._read(NEAREST_ACCESSIBLE_SQL, params)
 
+    async def accessible_documents(
+        self, scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> list[CatalogDocument]:
+        if scope is None:
+            return []
+        return await self._read(ACCESSIBLE_DOCUMENTS_SQL, (*scope, *_filter_params(filters)))
+
     async def is_current_version(self, version_id: str) -> bool:
         return bool(await self._read(IS_CURRENT_VERSION_SQL, (version_id,)))
 
@@ -462,6 +482,21 @@ class SampleVectorStore:
             chunk
             for chunk in rows
             if 1 - _cosine(embedding, embeddings[chunk["id"]]) <= config.vector_max_cosine_distance()
+        ]
+
+    async def accessible_documents(
+        self, scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> list[CatalogDocument]:
+        titles: dict[str, str] = {}
+        counts: dict[str, int] = {}
+        for chunk in SAMPLE_CHUNKS:
+            if not chunk.get("document_id"):
+                continue
+            titles[chunk["document_id"]] = chunk["source"] or chunk["document_id"]
+            counts[chunk["document_id"]] = counts.get(chunk["document_id"], 0) + 1
+        return [
+            {"id": id_, "title": title, "document_type": None, "chunk_count": counts[id_]}
+            for id_, title in sorted(titles.items())
         ]
 
     async def accessible_document_ids(
