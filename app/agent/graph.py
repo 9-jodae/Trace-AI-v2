@@ -13,7 +13,7 @@ from app.core import config
 from app.core.errors import describe_exception
 from app.core.schemas import AccessScope, SearchFilters
 from app.jev.client import can_answer_probability
-from app.llm.client import NO_EVIDENCE_ANSWER, generate_answer
+from app.llm.client import CLARIFICATION_KEY, NO_EVIDENCE_ANSWER, generate_answer, is_clarification
 from app.retrieval.schemas import Chunk
 from app.retrieval.service import filter_accessible_context, search
 
@@ -77,9 +77,15 @@ def select_route(state: AgentState) -> str:
     return "generate" if state["route"] == "CONTEXT" else "retrieve"
 
 
+def _follows_clarification(state: AgentState) -> bool:
+    history = _history(state)
+    return bool(history) and is_clarification(history[-1])
+
+
 def _search_query(state: AgentState) -> str:
     question = state["messages"][-1].text
-    if not FOLLOW_UP_PATTERN.match(question):
+    # "숙박비요"처럼 되물음에 답한 말은 그것만으로 검색하면 질문의 뜻을 잃는다
+    if not FOLLOW_UP_PATTERN.match(question) and not _follows_clarification(state):
         return question
     previous = next((message.text for message in reversed(_history(state)) if message.type == "human"), None)
     return f"{previous}\n{question}" if previous else question
@@ -94,10 +100,13 @@ async def generate(state: AgentState) -> dict:
     if not state["context"]:
         return {"messages": [AIMessage(content=NO_EVIDENCE_ANSWER)], "evidence": []}
     response = await generate_answer(state["messages"][-1].text, state["context"], _history(state))
-    answer, evidence = parse_answer(response, state["context"])
+    answer, evidence, clarification = parse_answer(response, state["context"])
+    # 두 번 연달아 되묻지 않는다. 모델이 어기면 일반 답변으로 내보낸다
+    clarification = clarification and not _follows_clarification(state)
     # 다음 턴의 대화 기록에는 JSON이 아니라 답변만 남긴다
-    update = {"messages": [AIMessage(content=answer)], "evidence": evidence}
-    if answer == NO_EVIDENCE_ANSWER:
+    message = AIMessage(content=answer, additional_kwargs={CLARIFICATION_KEY: True} if clarification else {})
+    update = {"messages": [message], "evidence": evidence}
+    if clarification or answer == NO_EVIDENCE_ANSWER:
         # 쓰이지 않은 청크를 출처로 보여 주거나 다음 턴에 재사용하지 않는다
         update["context"] = []
     return update

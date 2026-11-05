@@ -38,11 +38,27 @@ SYSTEM_PROMPT = f"""사내 문서 검색 결과를 바탕으로 질문에 답한
   - 문서끼리 내용이 다르면 각 값과 문서명을 함께 적고 확인이 필요하다고 쓴다.
   - 일부만 확인되면 마지막 줄에 "확인되지 않음: 내용"을 쓴다.
   - "제공된 문서에 따르면", "컨텍스트", "청크" 같은 내부 표현은 쓰지 않는다.
+- 다음 세 가지를 모두 만족할 때만 답하는 대신 되묻는다. 애매하면 되묻지 말고 답한다.
+  - 컨텍스트에 질문에 해당하는 서로 다른 대상이 2개 이상 있다.
+  - 대상에 따라 답이 달라지고, 질문과 이전 대화로 어느 쪽인지 좁힐 수 없다.
+  - 컨텍스트의 내용으로 선택지를 2~3개 제시할 수 있다.
+- 되물을 때는 answer에 선택지를 넣은 질문 한 문장을 쓴다.
+  options에 선택지와 그 대상이 있는 컨텍스트 항목 번호를 담고, evidence는 빈 배열로 둔다.
+- 되묻지 않을 때는 options를 빈 배열로 둔다.
+- 다음 경우에는 되묻지 않는다.
+  - 같은 대상인데 문서끼리 값이 다르면 두 값을 함께 답한다.
+  - 여러 대상의 답을 짧게 함께 줄 수 있으면 함께 답한다.
+  - 문서를 요약하라는 질문은 요약한다.
+  - 근거가 없으면 위의 거절 문장을 쓴다.
 - evidence에는 답변을 직접 뒷받침하는 문구를 1~3개 담는다. 뒷받침하는 문구가 없으면 빈 배열로 둔다.
 - quote는 컨텍스트 원문을 한 글자도 바꾸지 말고 그대로 복사한다. 요약하거나 고쳐 쓰지 않는다.
 - chunk는 그 문구가 있는 컨텍스트 항목의 번호다.
 다음 형식의 JSON 객체 하나만 응답한다. 코드 블록과 설명은 출력하지 않는다.
-{{"answer": "답변", "evidence": [{{"chunk": 1, "quote": "원문 그대로의 문구"}}]}}"""
+{{"answer": "답변",
+ "evidence": [{{"chunk": 1, "quote": "원문 그대로의 문구"}}],
+ "options": [{{"label": "선택지", "chunk": 1}}]}}"""
+CLARIFICATION_KEY = "clarification"
+NO_REPEAT_CLARIFICATION = "직전에 이미 되물었으므로 이번에는 되묻지 말고 답하거나 거절 문장을 쓴다."
 
 
 def _neutralize_tags(text: str) -> str:
@@ -50,12 +66,17 @@ def _neutralize_tags(text: str) -> str:
     return CONTEXT_TAG_PATTERN.sub("[context]", text)
 
 
-def build_prompt(question: str, context: list[Chunk]) -> str:
+def is_clarification(message: BaseMessage) -> bool:
+    return bool(message.additional_kwargs.get(CLARIFICATION_KEY))
+
+
+def build_prompt(question: str, context: list[Chunk], allow_clarification: bool = True) -> str:
     chunks = "\n".join(
         f"{number}. [{_neutralize_tags(chunk['source'] or '출처 미상')}] {_neutralize_tags(chunk['text'])}"
         for number, chunk in enumerate(context, start=1)
     )
-    return f"<context>\n{chunks}\n</context>\n\n질문: {question}"
+    prompt = f"<context>\n{chunks}\n</context>\n\n질문: {question}"
+    return prompt if allow_clarification else f"{prompt}\n\n{NO_REPEAT_CLARIFICATION}"
 
 
 @lru_cache(maxsize=2)
@@ -77,7 +98,7 @@ async def generate_answer(question: str, context: list[Chunk], history: list[Bas
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),
         *history,
-        HumanMessage(content=build_prompt(question, context)),
+        HumanMessage(content=build_prompt(question, context, not (history and is_clarification(history[-1])))),
     ]
     return await generate_structured_response(messages)
 
