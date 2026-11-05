@@ -6,7 +6,8 @@ from pathlib import Path
 
 from app.retrieval.chunking import chunk_document
 from app.retrieval.embedding import embed_documents
-from app.retrieval.schemas import DocumentInput
+from app.retrieval.relations import document_names, resolve_references
+from app.retrieval.schemas import Chunk, DocumentInput
 from app.retrieval.service import close_stores, get_real_stores
 
 logger = logging.getLogger(__name__)
@@ -26,27 +27,37 @@ def load_documents(path: Path) -> list[DocumentInput]:
     ]
 
 
-async def index_document(document: DocumentInput) -> int:
+async def index_document(document: DocumentInput) -> list[Chunk]:
     chunks = chunk_document(document["document_id"], document["version_id"], document["text"], document["source"])
     if not chunks:
-        return 0
+        return []
     vector_store, graph_store = get_real_stores()
     # 구버전 작업이면 임베딩 비용을 쓰지 않는다
     if not await vector_store.is_current_version(document["version_id"]):
         logger.warning("Indexing skipped: not the current version")
-        return 0
+        return []
     embeddings = await embed_documents([chunk["text"] for chunk in chunks])
     if not await vector_store.replace_version(document["version_id"], chunks, embeddings):
         logger.warning("Indexing skipped: version changed while embedding")
-        return 0
-    metadata = {key: value for key, value in document.items() if key != "text"}
-    await graph_store.replace_version(document["version_id"], document["document_id"], metadata, chunks)
-    return len(chunks)
+        return []
+    await graph_store.replace_document(
+        document["document_id"], document["source"], document_names(document), chunks
+    )
+    return chunks
 
 
 async def index_file(path: Path) -> int:
     try:
-        return sum([await index_document(document) for document in load_documents(path)])
+        documents = load_documents(path)
+        written = [(document, await index_document(document)) for document in documents]
+        if any(chunks for _, chunks in written):
+            _, graph_store = get_real_stores()
+            # 모든 문서 노드가 생긴 뒤에 참조를 해석하고 관계를 만든다
+            for document, chunks in written:
+                if chunks:
+                    links = resolve_references(document, chunks, documents)
+                    await graph_store.replace_references(document["document_id"], links)
+        return sum(len(chunks) for _, chunks in written)
     finally:
         await close_stores()
 

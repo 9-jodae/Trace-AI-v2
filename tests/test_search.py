@@ -30,6 +30,8 @@ class FakeStore:
         self.calls.append((query_or_embedding, limit, *scope))
         if self.error:
             raise self.error
+        if isinstance(query_or_embedding, str):
+            return [item["id"] if isinstance(item, dict) else item for item in self.result]
         return self.result
 
     async def fulltext(self, query, limit, scope, filters=None):
@@ -43,6 +45,16 @@ class FakeStore:
         if self.filter_error:
             raise self.filter_error
         return set(chunk_ids) if self.accessible is None else self.accessible
+
+    async def fetch_accessible(self, chunk_ids, scope, filters=None):
+        self.filter_calls.append((chunk_ids, scope, filters))
+        if self.filter_error:
+            raise self.filter_error
+        if scope is None:
+            return []
+        allowed = set(chunk_ids) if self.accessible is None else self.accessible
+        rows = {item["id"]: item for item in [*self.result, *self.fulltext_result] if isinstance(item, dict)}
+        return [rows.get(chunk_id, chunk(chunk_id)) for chunk_id in chunk_ids if chunk_id in allowed]
 
 
 @pytest.fixture

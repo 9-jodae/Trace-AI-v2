@@ -2,45 +2,72 @@ import re
 
 from neo4j import AsyncDriver, AsyncGraphDatabase, Query
 
+from app.retrieval.relations import DocumentReference, normalize_name
 from app.retrieval.schemas import Chunk
 
 CONNECT_TIMEOUT_SECONDS = 5
 QUERY_TIMEOUT_SECONDS = 5
-MAX_SEARCH_TERMS = 12
+MIN_NAME_LENGTH = 2
 
-# 노드·관계·인덱스는 AI 팀이 관리한다 (docs199-Server ai-server-contract)
+# Neo4j에는 본문과 권한을 두지 않고 문서·청크 위치와 참조 관계만 저장한다.
 SCHEMA_STATEMENTS = (
     "CREATE CONSTRAINT document_id IF NOT EXISTS FOR (d:Document) REQUIRE d.document_id IS UNIQUE",
     "CREATE CONSTRAINT chunk_id IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE",
-    "CREATE FULLTEXT INDEX chunk_text IF NOT EXISTS FOR (c:Chunk) ON EACH [c.text]",
-    "CALL db.awaitIndex('chunk_text', 300)",
 )
-FULLTEXT_SEARCH_CYPHER = """
-CALL db.index.fulltext.queryNodes('chunk_text', $query) YIELD node AS c, score
-MATCH (d:Document)-[:HAS_CHUNK]->(c)
-RETURN c.id AS id, c.text AS text, d.source AS source, d.document_id AS document_id,
-       c.version_id AS version_id, c.char_start AS char_start, c.char_end AS char_end
-ORDER BY score DESC
+SEEDS_CYPHER = "MATCH (d:Document) RETURN d.document_id AS id, d.names AS names"
+REFERENCE_SEARCH_CYPHER = """
+CALL {
+    UNWIND $documents AS document_id
+    MATCH (d:Document {document_id: document_id})-[:HAS_CHUNK]->(c:Chunk)
+    RETURN c.id AS id, 0 AS priority
+    UNION ALL
+    UNWIND $documents AS document_id
+    MATCH (d:Document {document_id: document_id})-[r:REFERENCES]-(related:Document)
+    MATCH (related)-[:HAS_CHUNK]->(c:Chunk)
+    RETURN c.id AS id, 1 AS priority
+    UNION ALL
+    UNWIND $documents AS document_id
+    MATCH (d:Document {document_id: document_id})-[r:REFERENCES]-(related:Document)
+    MATCH (source:Document)-[:HAS_CHUNK]->(reference_chunk:Chunk {id: r.chunk_id})
+    RETURN reference_chunk.id AS id, 2 AS priority
+}
+WITH id, min(priority) AS priority
+RETURN id
+ORDER BY priority, id
 LIMIT $limit
 """
-DELETE_VERSION_CYPHER = "MATCH (c:Chunk {version_id: $version_id}) DETACH DELETE c"
 MERGE_DOCUMENT_CYPHER = """
-MERGE (d:Document {document_id: $document.document_id})
-SET d.source = $document.source
+MERGE (d:Document {document_id: $document_id})
+SET d.source = $source, d.names = $names
+"""
+DELETE_DOCUMENT_CHUNKS_CYPHER = """
+MATCH (:Document {document_id: $document_id})-[:HAS_CHUNK]->(c:Chunk)
+DETACH DELETE c
 """
 CREATE_CHUNKS_CYPHER = """
 MATCH (d:Document {document_id: $document_id})
 UNWIND $chunks AS item
-CREATE (c:Chunk {id: item.id, text: item.text, version_id: item.version_id,
-                 char_start: item.char_start, char_end: item.char_end})
+CREATE (c:Chunk {id: item.id, version_id: item.version_id, char_start: item.char_start, char_end: item.char_end})
 CREATE (d)-[:HAS_CHUNK]->(c)
+"""
+DELETE_REFERENCES_CYPHER = "MATCH (:Document {document_id: $document_id})-[r:REFERENCES]->() DELETE r"
+CREATE_REFERENCES_CYPHER = """
+UNWIND $links AS item
+MATCH (source:Document {document_id: item.source_document_id})
+MATCH (target:Document {document_id: item.target_document_id})
+CREATE (source)-[:REFERENCES {chunk_id: item.chunk_id}]->(target)
 """
 
 
-def build_fulltext_query(text: str) -> str:
-    # Lucene 특수문자를 빼고 단어별 OR 검색으로 만든다
-    terms = re.findall(r"[\w가-힣]+", text, flags=re.UNICODE)[:MAX_SEARCH_TERMS]
-    return " OR ".join(f'"{term}"' for term in terms)
+def name_in_query(name: str, query: str) -> bool:
+    normalized = normalize_name(name)
+    if len(normalized) < MIN_NAME_LENGTH:
+        return False
+    compact_name = "".join(normalized.split())
+    compact_query = "".join(query.split())
+    left = r"(?<![a-z0-9])" if compact_name[0].isascii() and compact_name[0].isalnum() else ""
+    right = r"(?![a-z0-9])" if compact_name[-1].isascii() and compact_name[-1].isalnum() else ""
+    return re.search(left + re.escape(compact_name) + right, compact_query) is not None
 
 
 class Neo4jGraphStore:
@@ -56,29 +83,48 @@ class Neo4jGraphStore:
     async def close(self) -> None:
         await self._driver.close()
 
-    async def search(self, query: str, limit: int) -> list[Chunk]:
-        fulltext_query = build_fulltext_query(query)
-        if not fulltext_query:
-            return []
+    async def _read(self, statement: str, parameters: dict) -> list[dict]:
         async with self._driver.session(database=self._database) as session:
-            result = await session.run(
-                Query(FULLTEXT_SEARCH_CYPHER, timeout=QUERY_TIMEOUT_SECONDS),
-                # run()의 첫 인자 이름이 query라서 키워드 인자로 넘기면 충돌한다
-                {"query": fulltext_query, "limit": limit},
-            )
+            result = await session.run(Query(statement, timeout=QUERY_TIMEOUT_SECONDS), parameters)
             return [dict(record) async for record in result]
+
+    async def search(self, query: str, limit: int) -> list[str]:
+        normalized_query = normalize_name(query)
+        if not normalized_query:
+            return []
+        seeds = await self._read(SEEDS_CYPHER, {})
+        document_ids = [
+            seed["id"]
+            for seed in seeds
+            if any(name_in_query(name, normalized_query) for name in (seed["names"] or []))
+        ]
+        if not document_ids:
+            return []
+        rows = await self._read(REFERENCE_SEARCH_CYPHER, {"documents": document_ids, "limit": limit})
+        return [row["id"] for row in rows]
 
     async def ensure_schema(self) -> None:
         async with self._driver.session(database=self._database) as session:
             for statement in SCHEMA_STATEMENTS:
                 await (await session.run(statement)).consume()
 
-    async def replace_version(self, version_id: str, document_id: str, document: dict, chunks: list[Chunk]) -> None:
+    async def replace_document(self, document_id: str, source: str, names: list[str], chunks: list[Chunk]) -> None:
         async def write(tx) -> None:
-            await (await tx.run(DELETE_VERSION_CYPHER, version_id=version_id)).consume()
-            await (await tx.run(MERGE_DOCUMENT_CYPHER, document=document)).consume()
-            await (await tx.run(CREATE_CHUNKS_CYPHER, document_id=document_id, chunks=chunks)).consume()
+            await (await tx.run(MERGE_DOCUMENT_CYPHER, document_id=document_id, source=source, names=names)).consume()
+            await (await tx.run(DELETE_DOCUMENT_CHUNKS_CYPHER, document_id=document_id)).consume()
+            items = [{key: chunk[key] for key in ("id", "version_id", "char_start", "char_end")} for chunk in chunks]
+            if items:
+                await (await tx.run(CREATE_CHUNKS_CYPHER, document_id=document_id, chunks=items)).consume()
 
         await self.ensure_schema()
+        async with self._driver.session(database=self._database) as session:
+            await session.execute_write(write)
+
+    async def replace_references(self, document_id: str, links: list[DocumentReference]) -> None:
+        async def write(tx) -> None:
+            await (await tx.run(DELETE_REFERENCES_CYPHER, document_id=document_id)).consume()
+            if links:
+                await (await tx.run(CREATE_REFERENCES_CYPHER, links=links)).consume()
+
         async with self._driver.session(database=self._database) as session:
             await session.execute_write(write)

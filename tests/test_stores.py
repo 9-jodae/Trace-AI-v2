@@ -67,10 +67,17 @@ class TestSampleGraphStore:
         ],
     )
     def test_entity_match(self, query, expected):
-        assert [c["id"] for c in asyncio.run(stores.SampleGraphStore().search(query, 10))] == expected
+        assert asyncio.run(stores.SampleGraphStore().search(query, 10)) == expected
 
     def test_limit(self):
         assert len(asyncio.run(stores.SampleGraphStore().search("재택근무 규정", 1))) == 1
+
+    def test_graph_results_are_ids_and_body_is_loaded_from_vector_store(self):
+        vector = stores.SampleVectorStore()
+        ids = asyncio.run(stores.SampleGraphStore().search("결제 서비스", 10))
+        chunks = asyncio.run(vector.fetch_accessible(ids, SCOPE))
+        assert [item["id"] for item in chunks] == ids
+        assert all(item["text"] for item in chunks)
 
 
 FULL_A = {
@@ -228,6 +235,23 @@ class TestPostgresVectorStore:
         sql, params = data_statements(connection)[0]
         assert "FROM accessible_chunks(" in sql and "ANY(%s::uuid[])" in sql
         assert params == (*SCOPE, ["pdf"], None, None, None, None, ["a", "b"])
+
+    def test_fetch_accessible_reads_body_through_permission_function_in_graph_order(self, connect):
+        rows = [chunk("b"), chunk("a")]
+        connection = FakeConnection(rows=rows)
+        connect(connection)
+        filters = SearchFilters(extensions=["pdf"])
+        result = asyncio.run(stores.PostgresVectorStore("x").fetch_accessible(["b", "a"], SCOPE, filters))
+        assert result == rows
+        sql, params = data_statements(connection)[0]
+        assert "unnest(%s::uuid[]) WITH ORDINALITY" in sql
+        assert "JOIN accessible_chunks(" in sql
+        assert "ORDER BY r.ordinality" in sql
+        assert params == (["b", "a"], *SCOPE, ["pdf"], None, None, None, None)
+
+    @pytest.mark.parametrize("ids, scope", [(["a"], None), ([], SCOPE)])
+    def test_fetch_accessible_without_ids_or_scope_does_not_connect(self, ids, scope):
+        assert asyncio.run(stores.PostgresVectorStore("x").fetch_accessible(ids, scope)) == []
 
     def test_no_scope_returns_nothing_without_connecting(self):
         assert asyncio.run(stores.PostgresVectorStore("x").search([1.0], 1, None)) == []

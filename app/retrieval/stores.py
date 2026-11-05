@@ -46,6 +46,20 @@ SELECT c.id::text AS id
 FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
 WHERE c.id = ANY(%s::uuid[])
 """
+FETCH_ACCESSIBLE_SQL = """
+WITH requested AS (
+    SELECT chunk_id, ordinality
+    FROM unnest(%s::uuid[]) WITH ORDINALITY AS ids(chunk_id, ordinality)
+)
+SELECT c.id::text AS id, c.content AS text, d.title AS source, dv.document_id::text AS document_id,
+       c.document_version_id::text AS version_id, c.char_start, c.char_end
+FROM requested r
+JOIN accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
+  ON c.id = r.chunk_id
+JOIN document_versions dv ON dv.id = c.document_version_id
+JOIN documents d ON d.id = dv.document_id
+ORDER BY r.ordinality
+"""
 SET_STATEMENT_TIMEOUT_SQL = "SELECT set_config('statement_timeout', %s, true)"
 CONNECT_TIMEOUT_SECONDS = 5
 # 연결이 모두 사용 중이면 이 시간까지 기다린 뒤 실패한다
@@ -98,10 +112,18 @@ class VectorStore(Protocol):
         self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
     ) -> set[str]: ...
 
+    async def fetch_accessible(
+        self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> list[Chunk]: ...
+
 
 class GraphStore(Protocol):
-    # 그래프에는 권한 정보가 없으므로 결과는 VectorStore.filter_accessible을 거쳐야 내보낼 수 있다
-    async def search(self, query: str, limit: int) -> list[Chunk]: ...
+    # 그래프에는 본문과 권한을 두지 않는다. 반환한 ID를 VectorStore.fetch_accessible로 읽는다
+    async def search(self, query: str, limit: int) -> list[str]: ...
+
+    async def replace_document(self, document_id: str, source: str, names: list[str], chunks: list[Chunk]) -> None: ...
+
+    async def replace_references(self, document_id: str, links: list[dict[str, str]]) -> None: ...
 
 
 def _to_vector(embedding: list[float]) -> str:
@@ -197,6 +219,14 @@ class PostgresVectorStore:
             rows = await self._read(FILTER_ACCESSIBLE_WITH_FILTERS_SQL, (*scope, *_filter_params(filters), chunk_ids))
         return {row["id"] for row in rows}
 
+    async def fetch_accessible(
+        self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> list[Chunk]:
+        if scope is None or not chunk_ids:
+            return []
+        rows = await self._read(FETCH_ACCESSIBLE_SQL, (chunk_ids, *scope, *_filter_params(filters)))
+        return rows
+
     async def is_current_version(self, version_id: str) -> bool:
         return bool(await self._read(IS_CURRENT_VERSION_SQL, (version_id,)))
 
@@ -237,10 +267,13 @@ class NoGraphStore:
     async def close(self) -> None:
         pass
 
-    async def search(self, query: str, limit: int) -> list[Chunk]:
+    async def search(self, query: str, limit: int) -> list[str]:
         return []
 
-    async def replace_version(self, version_id: str, document_id: str, document: dict, chunks: list[Chunk]) -> None:
+    async def replace_document(self, document_id: str, source: str, names: list[str], chunks: list[Chunk]) -> None:
+        pass
+
+    async def replace_references(self, document_id: str, links: list[dict[str, str]]) -> None:
         pass
 
 
@@ -268,9 +301,15 @@ class SampleVectorStore:
     ) -> set[str]:
         return set(chunk_ids)
 
+    async def fetch_accessible(
+        self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> list[Chunk]:
+        by_id = {chunk["id"]: chunk for chunk in SAMPLE_CHUNKS}
+        return [by_id[chunk_id] for chunk_id in chunk_ids if chunk_id in by_id]
+
 
 class SampleGraphStore:
-    async def search(self, query: str, limit: int) -> list[Chunk]:
+    async def search(self, query: str, limit: int) -> list[str]:
         normalized = "".join(query.split()).casefold()
         linked = [
             chunk_id
@@ -278,4 +317,10 @@ class SampleGraphStore:
             if "".join(name.split()).casefold() in normalized
             for chunk_id in chunk_ids
         ]
-        return [chunk for chunk in SAMPLE_CHUNKS if chunk["id"] in linked][:limit]
+        return [chunk_id for chunk_id in linked][:limit]
+
+    async def replace_document(self, document_id: str, source: str, names: list[str], chunks: list[Chunk]) -> None:
+        pass
+
+    async def replace_references(self, document_id: str, links: list[dict[str, str]]) -> None:
+        pass

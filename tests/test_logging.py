@@ -75,6 +75,9 @@ def test_search_failure_log_has_no_exception_text(monkeypatch, caplog):
         async def filter_accessible(self, chunk_ids, scope, filters=None):
             return set()
 
+        async def fetch_accessible(self, chunk_ids, scope, filters=None):
+            return []
+
     class Empty:
         async def search(self, value, limit):
             return []

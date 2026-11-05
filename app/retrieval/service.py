@@ -96,10 +96,9 @@ async def search(
         return await vector_store.search(await embed_query(query), SOURCE_LIMIT, scope, filters)
 
     async def search_graph() -> list[Chunk]:
-        # 권한을 확인하지 못하면 그래프 결과도 내보내지 않도록 실패로 처리한다
-        candidates = await graph_store.search(query, GRAPH_CANDIDATE_LIMIT)
-        accessible = await vector_store.filter_accessible([chunk["id"] for chunk in candidates], scope, filters)
-        return [chunk for chunk in candidates if chunk["id"] in accessible][:SOURCE_LIMIT]
+        # Neo4j는 ID만 찾고 본문은 PostgreSQL 권한 함수가 허용한 행에서 다시 읽는다
+        candidate_ids = await graph_store.search(query, GRAPH_CANDIDATE_LIMIT)
+        return await vector_store.fetch_accessible(candidate_ids[:GRAPH_CANDIDATE_LIMIT], scope, filters)
 
     names = ["vector", "graph"]
     results = await asyncio.gather(search_vector(), search_graph(), return_exceptions=True)

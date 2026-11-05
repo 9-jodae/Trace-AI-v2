@@ -18,7 +18,7 @@ DOCUMENT = {
 
 @pytest.fixture
 def setup(monkeypatch):
-    state = {"embedded": [], "vector": [], "graph": [], "closed": 0, "current": True, "stored": True}
+    state = {"embedded": [], "vector": [], "graph": [], "references": [], "closed": 0, "current": True, "stored": True}
 
     async def embed(texts):
         state["embedded"].append(texts)
@@ -33,8 +33,11 @@ def setup(monkeypatch):
             return state["stored"]
 
     class Graph:
-        async def replace_version(self, version_id, document_id, document, chunks):
-            state["graph"].append((version_id, document_id, document, chunks))
+        async def replace_document(self, document_id, source, names, chunks):
+            state["graph"].append((document_id, source, names, chunks))
+
+        async def replace_references(self, document_id, links):
+            state["references"].append((document_id, links))
 
     async def close():
         state["closed"] += 1
@@ -46,12 +49,13 @@ def setup(monkeypatch):
 
 
 def test_chunks_embeds_and_writes_both_stores(setup):
-    count = asyncio.run(indexing.index_document(DOCUMENT))
+    asyncio.run(indexing.index_document(DOCUMENT))
     version, chunks, embeddings = setup["vector"][0]
-    assert count == len(chunks) == len(embeddings) > 1
+    assert len(chunks) == len(embeddings) > 1
     assert version == "ver"
-    graph_version, document_id, metadata, graph_chunks = setup["graph"][0]
-    assert (graph_version, document_id) == ("ver", "doc") and graph_chunks == chunks
+    document_id, source, names, graph_chunks = setup["graph"][0]
+    assert (document_id, source, names) == ("doc", "규정", ["규정"])
+    assert graph_chunks == chunks
 
 
 def test_embeds_chunk_text(setup):
@@ -68,11 +72,11 @@ def test_chunks_carry_server_columns(setup):
 
 def test_document_text_is_not_copied_to_metadata(setup):
     asyncio.run(indexing.index_document(DOCUMENT))
-    assert "text" not in setup["graph"][0][2]
+    assert DOC_TEXT not in repr(setup["graph"][0])
 
 
 def test_blank_document_does_not_touch_stores(setup):
-    assert asyncio.run(indexing.index_document({**DOCUMENT, "text": "   "})) == 0
+    assert asyncio.run(indexing.index_document({**DOCUMENT, "text": "   "})) == []
     assert setup["vector"] == [] and setup["graph"] == [] and setup["embedded"] == []
 
 
@@ -103,18 +107,43 @@ def test_index_file_indexes_all_and_closes(setup):
     path = Path(__file__).parents[1] / "data/demo_documents.json"
     assert asyncio.run(indexing.index_file(path)) > 0
     assert len(setup["vector"]) == 8 and setup["closed"] == 1
+    assert len(setup["references"]) == 8
+
+
+def test_index_file_resolves_explicit_reference_after_all_documents_exist(setup, monkeypatch, tmp_path):
+    source = {
+        "document_id": "source",
+        "version_id": "source-v1",
+        "source": "출장 신청 안내.pdf",
+        "text": "출장 신청 안내\n경비는 《경비 처리 절차》를 따릅니다.",
+    }
+    target = {
+        "document_id": "target",
+        "version_id": "target-v1",
+        "source": "경비 처리 절차.pdf",
+        "text": "경비 처리 절차\n영수증을 첨부합니다.",
+    }
+    monkeypatch.setattr(indexing, "load_documents", lambda path: [source, target])
+    count = asyncio.run(indexing.index_file(tmp_path / "documents.json"))
+    assert count > 0
+    source_links = next(links for document_id, links in setup["references"] if document_id == "source")
+    assert source_links == [{
+        "source_document_id": "source",
+        "target_document_id": "target",
+        "chunk_id": setup["graph"][0][3][0]["id"],
+    }]
 
 
 class TestStaleVersion:
     def test_stale_document_skips_embedding_and_stores(self, setup, caplog):
         setup["current"] = False
-        assert asyncio.run(indexing.index_document(DOCUMENT)) == 0
+        assert asyncio.run(indexing.index_document(DOCUMENT)) == []
         assert setup["embedded"] == [] and setup["vector"] == [] and setup["graph"] == []
         assert "not the current version" in caplog.text and DOC_TEXT not in caplog.text
 
     def test_version_changed_during_embedding_skips_graph(self, setup, caplog):
         setup["stored"] = False
-        assert asyncio.run(indexing.index_document(DOCUMENT)) == 0
+        assert asyncio.run(indexing.index_document(DOCUMENT)) == []
         assert len(setup["vector"]) == 1 and setup["graph"] == []
         assert "version changed" in caplog.text
 
