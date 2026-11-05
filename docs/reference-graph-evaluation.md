@@ -61,11 +61,47 @@ Neo4j 참조 검색을 켰을 때 기존 PostgreSQL 벡터·전문 검색보다 
 
 ## 시연 문서 비교 결과 (2026-11-05)
 
-시연 문서 18개, 참조 24개, 관리자 범위, 질문 9개(관련 7개, 무관 2개)로 검색 결과만 비교했습니다. 답변 품질은 재지 않았습니다.
+시연 문서 18개, Neo4j 참조 24개, 관리자 범위, 질문 9개(관련 7개, 무관 2개)로 검색 결과만 비교했습니다. 답변 품질은 재지 않았습니다.
 
 | 방식 | 기대 문서 적중 | 기대 밖 문서 |
 | --- | ---: | ---: |
-| 벡터+전문 | 14/16 | 23개 |
-| 벡터+전문+연쇄 | 15/16 | 34개 |
+| 벡터+전문 | 15/16 | 22개 |
+| 벡터+전문+연쇄 | 16/16 | 35개 |
 
-"장애가 나면 누구에게 알리고 복구 후엔 뭘 해?"에서 놓치던 《개발 운영 인수인계》를 연쇄로 찾았습니다. PUBLIC 범위에서 범위 밖 문서는 나오지 않았습니다. 무관 질문에도 문서가 붙을 수 있어 답변 단계의 거절에 의존합니다. 위 켜기 기준 중 오탐 조건은 충족하지 못했지만, 사용자 결정으로 서버에서 사용합니다. 표본이 작아 일반화할 수 없습니다.
+### 측정 조건
+
+- 코드 `6173b74`, Titan v2 1024차원, `VECTOR_MAX_COSINE_DISTANCE=0.85`, `FULLTEXT_FALLBACK_BELOW=5`
+- 연쇄 시작 문서 3개, 최대 2단계, 추가 청크 최대 2개. 결과 뒤에 더하며 `RRF`에 합치지 않습니다.
+- 기준선은 그래프 검색 전체(문서 이름, 엔티티 경로 포함)를 끈 상태입니다. 연쇄 쪽은 그래프 검색과 연쇄를 함께 켠 상태입니다.
+- 적중은 기대 문서가 결과에 있는지만 봅니다. 순위는 보지 않으므로 위 비교 절차의 `Top-1`, `MRR@5`는 계산하지 않았습니다.
+
+### 질문별 결과
+
+결과는 순위 순서의 문서 이름입니다. 연쇄 쪽은 기준선과 앞부분이 같아 더해진 문서만 적습니다.
+
+| 질문 | 기대 문서 | 기준선 적중 | 기준선 결과 | 연쇄 적중 | 연쇄가 더한 문서 |
+| --- | --- | ---: | --- | ---: | --- |
+| 의심 링크를 열었는데 신고 후 복구까지 뭘 해야 돼? | security-handbook, incident-runbook, dev-handover | 3/3 | incident-runbook, security-handbook, 장애 연락 흐름, dev-handover, discipline-policy | 3/3 | 문서 지식 지도, 신규 직원 안내 |
+| 출장 영수증을 낸 다음 결재는 어떻게 진행돼? | travel-policy, expense-approval | 2/2 | expense-approval, travel-policy, sales-handover, leave-policy, incident-runbook | 2/2 | sales-guide, discount-exception |
+| 사무실 이전 발주 비용은 누가 결재해? | operations-plan, expense-approval | 2/2 | operations-plan, expense-approval, dev-handover | 2/2 | travel-policy, release-report |
+| 담당자가 바뀔 때 고객 할인은 뭘 확인해? | sales-handover, sales-guide | 2/2 | sales-guide, sales-handover, discount-exception, 신규 직원 안내, 장애 연락 흐름 | 2/2 | 없음 |
+| 2분기 배포 장애 원인을 막으려면 배포 전에 뭘 확인해? | release-report, dev-handover | 2/2 | release-report, dev-handover, 장애 연락 흐름, 문서 지식 지도, leave-operation | 2/2 | security-handbook, 신규 직원 안내 |
+| 장애가 나면 누구에게 알리고 복구 후엔 뭘 해? | 장애 연락 흐름, incident-runbook, dev-handover | 2/3 | 장애 연락 흐름, incident-runbook, leave-operation, 문서 지식 지도, release-report | 3/3 | dev-handover, security-handbook |
+| 채용 안내에 넣을 연차 기준이 뭐야? | hiring-presentation, leave-policy | 2/2 | leave-operation, leave-policy, 신규 직원 안내, hiring-presentation, 문서 지식 지도 | 2/2 | security-handbook, 장애 연락 흐름 |
+| 오늘 점심 메뉴 추천해 줘 | 없음 | 0/0 | 없음 | 0/0 | 없음 |
+| 파이썬 리스트 정렬하는 법 알려줘 | 없음 | 0/0 | expense-approval, security-handbook, 신규 직원 안내, leave-operation | 0/0 | 문서 지식 지도, leave-policy |
+
+### 해석
+
+- 연쇄는 관련 질문 7개 중 1개에서 놓치던 문서를 찾았고, 기대 밖 문서는 13개 늘었습니다. 7개 중 6개는 적중이 그대로이고 더해진 문서는 모두 기대 밖입니다.
+- PUBLIC 범위에서 범위 밖 문서는 나오지 않았습니다.
+- 무관 질문에도 문서가 붙을 수 있어 답변 단계의 거절에 의존합니다. 위 켜기 기준 중 오탐 조건은 충족하지 못했습니다. 표본이 작아 일반화할 수 없습니다.
+- 첫 측정은 14/16, 15/16이었는데 `travel-policy`가 서버 DB에서 삭제된 상태(2026-11-05 07:46 UTC, 원인 미상)였습니다. 복구 후 다시 잰 값이 위 표입니다.
+
+### 현재 사용 상태
+
+사용자 결정으로 서버에서 연쇄 검색을 켰다가, `docs199-Server#14`의 시연 문서 확인 요청에 따라 `GRAPH_SEARCH_ENABLED=false`로 껐습니다. 다시 켤지는 아직 정하지 않았습니다.
+
+### 통합 확인
+
+임시 PostgreSQL과 Neo4j(서버와 같은 이미지 버전), 가상 문서로 쓰기 Cypher, 두 단계 연쇄, 단계 중 권한 거부, 이전 버전 차단, 질문 임베딩 실패, V15 `replace_document_topics` 호출을 확인했고 15개 항목이 통과했습니다. LLM과 임베딩은 대역이고 권한 함수는 시험용이라 서버의 권한 정책을 대신하지 않습니다.
