@@ -1,3 +1,5 @@
+from typing import NamedTuple
+
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
@@ -11,3 +13,12 @@ class CamelModel(BaseModel):
 class ErrorResponse(CamelModel):
     code: str
     message: str
+
+
+class AccessScope(NamedTuple):
+    """Spring의 AccessScope. 순서는 서버 권한 함수의 인자 순서와 같다."""
+
+    department_id: str | None
+    position: str | None
+    clearance: str | None
+    is_admin: bool

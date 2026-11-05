@@ -66,17 +66,20 @@ def test_jev_failure_log_has_no_exception_text(ask, ai, caplog):
 
 def test_search_failure_log_has_no_exception_text(monkeypatch, caplog):
     class Failing:
-        async def search(self, value, limit, allowed_groups):
+        async def search(self, value, limit, scope):
             raise RuntimeError(SECRET)
 
+        async def filter_accessible(self, chunk_ids, scope):
+            return set()
+
     class Empty:
-        async def search(self, value, limit, allowed_groups):
+        async def search(self, value, limit):
             return []
 
     async def embed(query):
         return [0.1]
 
-    monkeypatch.setenv("ALLOWED_GROUP_IDS", "all-staff")
+    monkeypatch.setenv("ACCESS_CLEARANCE", "INTERNAL")
     monkeypatch.setattr(service, "get_stores", lambda: (Failing(), Empty()))
     monkeypatch.setattr(service, "embed_query", embed)
     assert asyncio.run(service.search("질문"))["failed_sources"] == ["vector"]

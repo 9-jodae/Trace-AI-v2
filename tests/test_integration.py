@@ -126,15 +126,15 @@ def test_invalid_dimensions_only_disable_vector_search(client, counter, monkeypa
     assert post(client, "결제 서비스").json()["failedSources"] == ["vector"]
 
 
-def test_database_connection_failure_only_disables_vector_search(client, counter, monkeypatch):
+def test_database_connection_failure_exposes_nothing(client, counter, monkeypatch):
+    # 그래프 결과의 권한도 PostgreSQL로 확인하므로 DB가 멈추면 그래프 결과도 내보내지 않는다
     async def refuse(*args, **kwargs):
         raise OSError("connection refused")
 
     monkeypatch.setattr(stores.psycopg.AsyncConnection, "connect", refuse)
-    monkeypatch.setenv("ALLOWED_GROUP_IDS", "all-staff")
+    monkeypatch.setenv("ACCESS_CLEARANCE", "INTERNAL")
     monkeypatch.setattr(service, "get_stores", lambda: (stores.PostgresVectorStore("db"), stores.SampleGraphStore()))
-    body = post(client, "결제 서비스").json()
-    assert body["failedSources"] == ["vector"] and body["sources"]
+    assert post(client, "결제 서비스").status_code == 503
 
 
 def test_wrong_embedding_dimensions_only_disable_vector_search(client, counter, monkeypatch):

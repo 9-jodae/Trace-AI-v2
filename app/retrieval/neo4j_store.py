@@ -2,7 +2,7 @@ import re
 
 from neo4j import AsyncDriver, AsyncGraphDatabase, Query
 
-from app.retrieval.schemas import ACTIVE_STATUS, Chunk
+from app.retrieval.schemas import Chunk
 
 CONNECT_TIMEOUT_SECONDS = 5
 QUERY_TIMEOUT_SECONDS = 5
@@ -18,7 +18,6 @@ SCHEMA_STATEMENTS = (
 FULLTEXT_SEARCH_CYPHER = """
 CALL db.index.fulltext.queryNodes('chunk_text', $query) YIELD node AS c, score
 MATCH (d:Document)-[:HAS_CHUNK]->(c)
-WHERE d.status = $status AND any(group IN coalesce(d.allowed_group_ids, []) WHERE group IN $allowed_groups)
 RETURN c.id AS id, c.text AS text, d.source AS source, d.document_id AS document_id,
        c.version_id AS version_id, c.char_start AS char_start, c.char_end AS char_end
 ORDER BY score DESC
@@ -27,7 +26,7 @@ LIMIT $limit
 DELETE_VERSION_CYPHER = "MATCH (c:Chunk {version_id: $version_id}) DETACH DELETE c"
 MERGE_DOCUMENT_CYPHER = """
 MERGE (d:Document {document_id: $document.document_id})
-SET d.source = $document.source, d.status = $document.status, d.allowed_group_ids = $document.allowed_group_ids
+SET d.source = $document.source
 """
 CREATE_CHUNKS_CYPHER = """
 MATCH (d:Document {document_id: $document_id})
@@ -57,15 +56,15 @@ class Neo4jGraphStore:
     async def close(self) -> None:
         await self._driver.close()
 
-    async def search(self, query: str, limit: int, allowed_groups: list[str]) -> list[Chunk]:
+    async def search(self, query: str, limit: int) -> list[Chunk]:
         fulltext_query = build_fulltext_query(query)
-        if not allowed_groups or not fulltext_query:
+        if not fulltext_query:
             return []
         async with self._driver.session(database=self._database) as session:
             result = await session.run(
                 Query(FULLTEXT_SEARCH_CYPHER, timeout=QUERY_TIMEOUT_SECONDS),
                 # run()의 첫 인자 이름이 query라서 키워드 인자로 넘기면 충돌한다
-                {"query": fulltext_query, "status": ACTIVE_STATUS, "allowed_groups": allowed_groups, "limit": limit},
+                {"query": fulltext_query, "limit": limit},
             )
             return [dict(record) async for record in result]
 

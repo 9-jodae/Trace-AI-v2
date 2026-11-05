@@ -70,6 +70,9 @@ class FakeAi:
             raise self.probability
         return self.probability
 
+    async def filter_context(self, chunks):
+        return chunks
+
     async def search(self, query):
         self.search_calls.append(query)
         if isinstance(self.search_result, Exception):
@@ -88,6 +91,7 @@ def ai(monkeypatch):
     fake = FakeAi()
     monkeypatch.setattr(graph, "can_answer_probability", fake.can_answer)
     monkeypatch.setattr(graph, "search", fake.search)
+    monkeypatch.setattr(graph, "filter_accessible_context", fake.filter_context)
     monkeypatch.setattr(graph, "generate_answer", fake.generate)
     return fake
 

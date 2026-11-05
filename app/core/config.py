@@ -3,6 +3,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app.core.schemas import AccessScope
+
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 DEFAULT_JEV_MODEL = "jev-latest"
@@ -35,11 +37,16 @@ def use_sample_data() -> bool:
     return not is_production() and os.getenv("USE_SAMPLE_DATA") == "true"
 
 
-def allowed_group_ids() -> list[str]:
-    # 운영에서는 사용자별 권한을 요청으로 받아야 하므로 환경 변수로 열어 주지 않는다 (AccessScope 계약 대기)
+def access_scope() -> AccessScope | None:
+    # 운영에서는 사용자별 권한을 요청으로 받아야 하므로 환경 변수로 열어 주지 않는다 (AccessScope 전달 형식 대기)
     if is_production():
-        return []
-    return [group.strip() for group in os.getenv("ALLOWED_GROUP_IDS", "").split(",") if group.strip()]
+        return None
+    is_admin = os.getenv("ACCESS_IS_ADMIN") == "true"
+    clearance = os.getenv("ACCESS_CLEARANCE") or None
+    if not is_admin and not clearance:
+        return None
+    department_id = os.getenv("ACCESS_DEPARTMENT_ID") or None
+    return AccessScope(department_id, os.getenv("ACCESS_POSITION") or None, clearance, is_admin)
 
 
 def neo4j_uri() -> str | None:

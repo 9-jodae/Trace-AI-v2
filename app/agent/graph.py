@@ -12,7 +12,7 @@ from app.core.errors import describe_exception
 from app.jev.client import can_answer_probability
 from app.llm.client import generate_answer
 from app.retrieval.schemas import Chunk
-from app.retrieval.service import search
+from app.retrieval.service import filter_accessible_context, search
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,16 @@ async def judge_context(state: AgentState) -> dict:
         return decision
     if not config.jev_api_key():
         return {**decision, "fallback_reason": "JEV_API_KEY가 설정되지 않았습니다."}
+
+    # 외부 JEV로 보내기 전에 확인한다. 확인하지 못한 근거는 재사용하지 않는다
+    try:
+        context = await filter_accessible_context(context)
+    except Exception as exc:
+        logger.error("Context revalidation failed: %s", describe_exception(exc))
+        return {**decision, "context": [], "fallback_reason": f"근거 재검증 실패 ({type(exc).__name__})"}
+    if not context:
+        return {**decision, "context": []}
+    decision["context"] = context
 
     history = [f"{message.type}: {message.text}" for message in _history(state)]
     try:

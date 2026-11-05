@@ -13,8 +13,9 @@
 
 추측해서 구현하지 않고, `docs199-Server#14`, `#15`에서 확정되면 반영합니다.
 
-- 사용자 권한 범위(`AccessScope`) 전달 형식과 `threadId` 소유자 검증
-- 청크 스키마에 맞춘 저장소 코드. 벡터 저장소는 pgvector로 확정됐고(`docs199-Server#14`), 현재 SQL의 컬럼은 아직 가정입니다.
+- 질문 요청으로 사용자 권한 범위(`AccessScope`)를 받는 JSON 형식
+- `char_start`, `char_end`의 기준 텍스트와 단위. 현재는 적재 입력 본문의 Python 문자 위치입니다.
+- PDF 페이지와 `bbox`(`chunks.page`, `chunks.location`). 파서 확정 후 저장합니다.
 - `/ingest` 요청·콜백 필드와 원본 파일 전달 방식
 - 대화 맥락 복원을 위한 `conversationId`와 이전 메시지 전달 방식
 - 질문 길이 제한. 현재 2,000자는 임시값입니다.

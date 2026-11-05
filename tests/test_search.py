@@ -7,20 +7,32 @@ from fastapi.testclient import TestClient
 import main
 from app.core import config
 from app.core.errors import AiUnavailableError
+from app.core.schemas import AccessScope
 from app.retrieval import service
+
+SCOPE = AccessScope("dept", "STAFF", "INTERNAL", False)
 
 
 class FakeStore:
-    def __init__(self, result=None, error=None):
+    def __init__(self, result=None, error=None, accessible=None, filter_error=None):
         self.result = result or []
         self.error = error
+        self.accessible = accessible
+        self.filter_error = filter_error
         self.calls = []
+        self.filter_calls = []
 
-    async def search(self, query_or_embedding, limit, allowed_groups):
-        self.calls.append((query_or_embedding, limit, allowed_groups))
+    async def search(self, query_or_embedding, limit, *scope):
+        self.calls.append((query_or_embedding, limit, *scope))
         if self.error:
             raise self.error
         return self.result
+
+    async def filter_accessible(self, chunk_ids, scope):
+        self.filter_calls.append((chunk_ids, scope))
+        if self.filter_error:
+            raise self.filter_error
+        return set(chunk_ids) if self.accessible is None else self.accessible
 
 
 @pytest.fixture
@@ -29,7 +41,7 @@ def stores(monkeypatch):
         return [0.1, 0.2]
 
     def install(vector, graph):
-        monkeypatch.setenv("ALLOWED_GROUP_IDS", "all-staff, hr")
+        monkeypatch.setattr(service.config, "access_scope", lambda: SCOPE)
         monkeypatch.setattr(service, "get_stores", lambda: (vector, graph))
         monkeypatch.setattr(service, "embed_query", fake_embed)
 
@@ -40,8 +52,8 @@ def test_queries_both_stores(stores):
     vector, graph = FakeStore([chunk("a")]), FakeStore([chunk("b")])
     stores(vector, graph)
     asyncio.run(service.search("질문"))
-    assert vector.calls == [([0.1, 0.2], service.SOURCE_LIMIT, ["all-staff", "hr"])]
-    assert graph.calls == [("질문", service.SOURCE_LIMIT, ["all-staff", "hr"])]
+    assert vector.calls == [([0.1, 0.2], service.SOURCE_LIMIT, SCOPE)]
+    assert graph.calls == [("질문", service.GRAPH_CANDIDATE_LIMIT)]
 
 
 def test_stores_run_in_parallel(stores):
@@ -49,7 +61,7 @@ def test_stores_run_in_parallel(stores):
         event = None
         order = []
 
-        async def search(self, value, limit, allowed_groups):
+        async def search(self, value, limit, *scope):
             Waiting.order.append("start")
             await asyncio.sleep(0)
             Waiting.order.append("end")
@@ -89,7 +101,7 @@ def test_embedding_failure_counts_as_vector_failure(monkeypatch):
         raise RuntimeError("embedding")
 
     graph = FakeStore([chunk("b")])
-    monkeypatch.setenv("ALLOWED_GROUP_IDS", "all-staff")
+    monkeypatch.setenv("ACCESS_CLEARANCE", "INTERNAL")
     monkeypatch.setattr(service, "embed_query", fail)
     monkeypatch.setattr(service, "get_stores", lambda: (FakeStore(), graph))
     assert asyncio.run(service.search("질문"))["failed_sources"] == ["vector"]
@@ -156,6 +168,12 @@ class TestRealStoreSelection:
         with pytest.raises(AiUnavailableError):
             service.get_stores()
 
+    def test_dimensions_must_match_chunks_table(self, monkeypatch, neo4j):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://db")
+        monkeypatch.setenv("EMBEDDING_DIMENSIONS", "1536")
+        with pytest.raises(AiUnavailableError):
+            service.get_stores()
+
     def test_missing_neo4j_fails(self, monkeypatch):
         monkeypatch.setenv("DATABASE_URL", "postgresql://db")
         with pytest.raises(AiUnavailableError):
@@ -182,8 +200,42 @@ class TestRealStoreSelection:
         asyncio.run(service.close_stores())
 
 
+class TestGraphPermissionFilter:
+    def test_inaccessible_graph_results_are_removed(self, stores):
+        vector = FakeStore(accessible={"b"})
+        graph = FakeStore([chunk("secret"), chunk("b")])
+        stores(vector, graph)
+        result = asyncio.run(service.search("질문"))
+        assert [c["id"] for c in result["chunks"]] == ["b"]
+        assert vector.filter_calls == [(["secret", "b"], SCOPE)]
+
+    def test_filter_failure_drops_graph_results(self, stores):
+        stores(FakeStore([chunk("a")], filter_error=RuntimeError("db")), FakeStore([chunk("secret")]))
+        result = asyncio.run(service.search("질문"))
+        assert result == {"chunks": [chunk("a")], "failed_sources": ["graph"]}
+
+    def test_postgres_down_exposes_nothing(self, stores):
+        stores(FakeStore(error=RuntimeError("db"), filter_error=RuntimeError("db")), FakeStore([chunk("secret")]))
+        with pytest.raises(AiUnavailableError):
+            asyncio.run(service.search("질문"))
+
+    def test_filtered_results_keep_limit(self, stores):
+        stores(FakeStore(), FakeStore([chunk(str(i)) for i in range(service.GRAPH_CANDIDATE_LIMIT)]))
+        assert len(asyncio.run(service.search("질문"))["chunks"]) == service.CONTEXT_LIMIT
+
+
+class TestFilterAccessibleContext:
+    def test_keeps_order_of_accessible_chunks(self, monkeypatch):
+        vector = FakeStore(accessible={"c", "a"})
+        monkeypatch.setattr(service, "get_stores", lambda: (vector, FakeStore()))
+        monkeypatch.setattr(service.config, "access_scope", lambda: SCOPE)
+        chunks = [chunk("a"), chunk("b"), chunk("c")]
+        assert [c["id"] for c in asyncio.run(service.filter_accessible_context(chunks))] == ["a", "c"]
+        assert vector.filter_calls == [(["a", "b", "c"], SCOPE)]
+
+
 class TestPermissionFailsClosed:
-    def test_no_groups_returns_nothing_and_skips_embedding(self, monkeypatch):
+    def test_no_scope_returns_nothing_and_skips_embedding(self, monkeypatch):
         async def forbidden(query):
             raise AssertionError("임베딩을 호출하면 안 됩니다")
 
@@ -193,14 +245,25 @@ class TestPermissionFailsClosed:
         assert asyncio.run(service.search("질문")) == {"chunks": [], "failed_sources": []}
         assert store.calls == []
 
-    def test_production_ignores_group_setting(self, monkeypatch):
+    def test_production_ignores_scope_setting(self, monkeypatch):
         monkeypatch.setenv("APP_ENV", "production")
-        monkeypatch.setenv("ALLOWED_GROUP_IDS", "all-staff")
-        assert config.allowed_group_ids() == []
+        monkeypatch.setenv("ACCESS_CLEARANCE", "CONFIDENTIAL")
+        monkeypatch.setenv("ACCESS_IS_ADMIN", "true")
+        assert config.access_scope() is None
 
-    def test_local_group_setting_is_parsed(self, monkeypatch):
-        monkeypatch.setenv("ALLOWED_GROUP_IDS", " a , ,b ")
-        assert config.allowed_group_ids() == ["a", "b"]
+    def test_local_scope_is_parsed(self, monkeypatch):
+        monkeypatch.setenv("ACCESS_DEPARTMENT_ID", "dept")
+        monkeypatch.setenv("ACCESS_POSITION", "STAFF")
+        monkeypatch.setenv("ACCESS_CLEARANCE", "INTERNAL")
+        assert config.access_scope() == AccessScope("dept", "STAFF", "INTERNAL", False)
+
+    def test_local_admin_needs_no_clearance(self, monkeypatch):
+        monkeypatch.setenv("ACCESS_IS_ADMIN", "true")
+        assert config.access_scope() == AccessScope(None, None, None, True)
+
+    def test_local_scope_without_clearance_is_none(self, monkeypatch):
+        monkeypatch.setenv("ACCESS_DEPARTMENT_ID", "dept")
+        assert config.access_scope() is None
 
 
 def test_app_shutdown_closes_stores(monkeypatch):

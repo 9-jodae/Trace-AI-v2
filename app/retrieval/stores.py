@@ -4,26 +4,34 @@ from typing import Protocol
 import psycopg
 from psycopg.rows import dict_row
 
+from app.core.schemas import AccessScope
 from app.retrieval.embedding import embed_documents
-from app.retrieval.schemas import ACTIVE_STATUS, Chunk
+from app.retrieval.schemas import Chunk
 
-# TODO: 벡터 저장소 비교 결정과 docs199-Server#15 스키마에 맞게 수정. 아래 컬럼은 가정이다
+# chunks.embedding 컬럼의 차원 (docs199-Server V11)
+CHUNK_EMBEDDING_DIMENSIONS = 1024
+# 권한 판단은 서버 함수에 맡긴다. 삭제된 문서와 이전 버전도 함수가 제외한다 (docs199-Server V12)
 VECTOR_SEARCH_SQL = """
-SELECT id::text AS id, text, source, document_id::text AS document_id, version_id::text AS version_id,
-       char_start, char_end
-FROM chunks
-WHERE status = %s AND allowed_group_ids && %s::text[]
-ORDER BY embedding <=> %s::vector
+SELECT c.id::text AS id, c.content AS text, d.title AS source, dv.document_id::text AS document_id,
+       c.document_version_id::text AS version_id, c.char_start, c.char_end
+FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean) c
+JOIN document_versions dv ON dv.id = c.document_version_id
+JOIN documents d ON d.id = dv.document_id
+WHERE c.embedding IS NOT NULL
+ORDER BY c.embedding <=> %s::vector
 LIMIT %s
+"""
+FILTER_ACCESSIBLE_SQL = """
+SELECT chunk_id::text AS id
+FROM filter_accessible_chunk_ids(%s::uuid, %s::text, %s::text, %s::boolean, %s::uuid[]) AS chunk_id
 """
 CONNECT_TIMEOUT_SECONDS = 5
 SEARCH_STATEMENT_TIMEOUT_MS = 5_000
 WRITE_STATEMENT_TIMEOUT_MS = 60_000
-DELETE_VERSION_SQL = "DELETE FROM chunks WHERE version_id = %s"
+DELETE_VERSION_SQL = "DELETE FROM chunks WHERE document_version_id = %s"
 INSERT_CHUNK_SQL = """
-INSERT INTO chunks (id, text, source, document_id, version_id, char_start, char_end, status, allowed_group_ids,
-                    embedding)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector)
+INSERT INTO chunks (id, document_version_id, chunk_index, content, char_start, char_end, content_hash, embedding)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s::vector)
 """
 
 # USE_SAMPLE_DATA=true인 로컬 데모에서만 쓰는 샘플 데이터
@@ -41,11 +49,14 @@ SAMPLE_ENTITIES = {
 
 
 class VectorStore(Protocol):
-    async def search(self, embedding: list[float], limit: int, allowed_groups: list[str]) -> list[Chunk]: ...
+    async def search(self, embedding: list[float], limit: int, scope: AccessScope | None) -> list[Chunk]: ...
+
+    async def filter_accessible(self, chunk_ids: list[str], scope: AccessScope | None) -> set[str]: ...
 
 
 class GraphStore(Protocol):
-    async def search(self, query: str, limit: int, allowed_groups: list[str]) -> list[Chunk]: ...
+    # 그래프에는 권한 정보가 없으므로 결과는 VectorStore.filter_accessible을 거쳐야 내보낼 수 있다
+    async def search(self, query: str, limit: int) -> list[Chunk]: ...
 
 
 def _to_vector(embedding: list[float]) -> str:
@@ -64,19 +75,26 @@ class PostgresVectorStore:
     async def close(self) -> None:
         pass
 
-    async def search(self, embedding: list[float], limit: int, allowed_groups: list[str]) -> list[Chunk]:
-        if not allowed_groups:
-            return []
+    async def _read(self, sql: str, params: tuple) -> list[dict]:
         async with await psycopg.AsyncConnection.connect(
             self._database_url,
             row_factory=dict_row,
             connect_timeout=CONNECT_TIMEOUT_SECONDS,
             options=f"-c statement_timeout={SEARCH_STATEMENT_TIMEOUT_MS}",
         ) as connection:
-            cursor = await connection.execute(
-                VECTOR_SEARCH_SQL, (ACTIVE_STATUS, allowed_groups, _to_vector(embedding), limit)
-            )
+            cursor = await connection.execute(sql, params)
             return await cursor.fetchall()
+
+    async def search(self, embedding: list[float], limit: int, scope: AccessScope | None) -> list[Chunk]:
+        if scope is None:
+            return []
+        return await self._read(VECTOR_SEARCH_SQL, (*scope, _to_vector(embedding), limit))
+
+    async def filter_accessible(self, chunk_ids: list[str], scope: AccessScope | None) -> set[str]:
+        if scope is None or not chunk_ids:
+            return set()
+        rows = await self._read(FILTER_ACCESSIBLE_SQL, (*scope, chunk_ids))
+        return {row["id"] for row in rows}
 
     async def replace_version(self, version_id: str, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
         # 재색인 시 줄어든 청크가 남지 않도록 같은 버전의 청크를 한 트랜잭션에서 교체한다
@@ -93,14 +111,12 @@ class PostgresVectorStore:
                     [
                         (
                             chunk["id"],
-                            chunk["text"],
-                            chunk["source"],
-                            chunk["document_id"],
                             chunk["version_id"],
+                            chunk["chunk_index"],
+                            chunk["text"],
                             chunk["char_start"],
                             chunk["char_end"],
-                            chunk["status"],
-                            chunk["allowed_group_ids"],
+                            chunk["content_hash"],
                             _to_vector(embedding),
                         )
                         for chunk, embedding in pairs
@@ -112,16 +128,19 @@ class SampleVectorStore:
     def __init__(self) -> None:
         self._embeddings: list[list[float]] | None = None
 
-    async def search(self, embedding: list[float], limit: int, allowed_groups: list[str]) -> list[Chunk]:
+    async def search(self, embedding: list[float], limit: int, scope: AccessScope | None) -> list[Chunk]:
         if self._embeddings is None:
             self._embeddings = await embed_documents([chunk["text"] for chunk in SAMPLE_CHUNKS])
         scored = zip(SAMPLE_CHUNKS, self._embeddings)
         ranked = sorted(scored, key=lambda item: _cosine(embedding, item[1]), reverse=True)
         return [chunk for chunk, _ in ranked[:limit]]
 
+    async def filter_accessible(self, chunk_ids: list[str], scope: AccessScope | None) -> set[str]:
+        return set(chunk_ids)
+
 
 class SampleGraphStore:
-    async def search(self, query: str, limit: int, allowed_groups: list[str]) -> list[Chunk]:
+    async def search(self, query: str, limit: int) -> list[Chunk]:
         normalized = "".join(query.split()).casefold()
         linked = [
             chunk_id

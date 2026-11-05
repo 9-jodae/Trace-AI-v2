@@ -19,9 +19,11 @@
 
 샘플 데이터를 켜지 않으면 `DATABASE_URL`(pgvector)과 Neo4j 접속 정보가 필요합니다. 없으면 검색 경로는 503을 반환하며, 샘플로 대체하지 않습니다.
 
-사용자 권한 범위를 받는 계약이 아직 없어, 운영 환경에서는 저장소를 연결해도 어떤 문서도 근거로 돌려주지 않습니다. 로컬 시험에서는 `ALLOWED_GROUP_IDS`로 허용 그룹을 지정합니다.
+권한은 서버의 `accessible_chunks`와 `filter_accessible_chunk_ids`로 판단합니다. 그래프 검색 결과와 재사용할 이전 근거도 `filter_accessible_chunk_ids`를 거치므로, PostgreSQL이 멈추면 그래프 결과도 내보내지 않습니다.
 
-JSON 문서는 `python -m app.retrieval.indexing data/demo_documents.json`으로 적재합니다. 적재와 검색 코드는 PR #17에서 옮겼고, 파일 업로드와 파서는 아직 없습니다.
+질문 요청으로 `AccessScope`를 받는 형식이 아직 없어, 운영 환경에서는 저장소를 연결해도 어떤 문서도 근거로 돌려주지 않습니다. 로컬 시험에서는 `ACCESS_DEPARTMENT_ID`, `ACCESS_POSITION`, `ACCESS_CLEARANCE`, `ACCESS_IS_ADMIN`으로 권한 범위를 지정합니다. `ACCESS_CLEARANCE`나 `ACCESS_IS_ADMIN=true`가 없으면 권한 범위가 없는 것으로 봅니다.
+
+JSON 문서는 `python -m app.retrieval.indexing <파일>`로 적재합니다. 파일 업로드와 파서는 아직 없습니다. `chunks.document_version_id`가 서버의 `document_versions.id`를 참조하므로 `version_id`는 서버에 있는 문서 버전의 UUID여야 합니다. `data/demo_documents.json`은 문자열 ID를 쓰고 있어 그대로는 팀 서버에 적재할 수 없습니다.
 
 대화는 메모리에 저장하며 대화당 최근 메시지 6개와 컨텍스트만 보관합니다. 기본값은 최대 1,000개 대화, 1시간이고 `MAX_CONVERSATIONS`, `CONVERSATION_TTL_SECONDS`로 바꿀 수 있습니다. 서버를 재시작하면 사라집니다.
 
@@ -31,7 +33,7 @@ JSON 문서는 `python -m app.retrieval.indexing data/demo_documents.json`으로
 
 운영 PostgreSQL과 Neo4j는 SSH 터널로 접속합니다. 터널 명령과 계정은 `docs199-Server` 저장소의 `docs/ai-integration-setup.md`를 따르고, 비밀번호는 팀장에게 받습니다.
 
-`DATABASE_URL`은 `postgresql://ai_app:비밀번호@localhost:5432/docs199` 형식으로 적습니다. `ai_app`은 지정된 테이블의 읽기 권한만 있고 DDL을 실행할 수 없습니다. 벡터 검색이 쓰는 `chunks` 테이블과 쓰기 권한은 `docs199-Server`의 Flyway 마이그레이션으로 추가되어야 합니다.
+`DATABASE_URL`은 `postgresql://ai_app:비밀번호@localhost:5432/docs199` 형식으로 적습니다. `ai_app`은 `chunks`만 읽고 쓸 수 있고 나머지 허용 테이블은 읽기 전용이며, DDL을 실행할 수 없습니다. `chunks`는 1024차원이므로 `EMBEDDING_DIMENSIONS=1024`가 아니면 운영 저장소를 쓰지 않습니다. 스키마는 `docs199-Server`의 Flyway(V11, V12)가 관리합니다.
 
 ## 테스트
 

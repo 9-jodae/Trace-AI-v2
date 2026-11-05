@@ -13,8 +13,6 @@ DOCUMENT = {
     "version_id": "ver",
     "text": DOC_TEXT,
     "source": "규정",
-    "status": "유효",
-    "allowed_group_ids": ["hr"],
 }
 
 
@@ -57,9 +55,11 @@ def test_embeds_chunk_text(setup):
     assert setup["embedded"][0] == [c["text"] for c in setup["vector"][0][1]]
 
 
-def test_chunks_carry_permission_fields(setup):
+def test_chunks_carry_server_columns(setup):
     asyncio.run(indexing.index_document(DOCUMENT))
-    assert all(c["status"] == "유효" and c["allowed_group_ids"] == ["hr"] for c in setup["vector"][0][1])
+    chunks = setup["vector"][0][1]
+    assert [c["chunk_index"] for c in chunks] == list(range(len(chunks)))
+    assert all(len(c["content_hash"]) == 64 for c in chunks)
 
 
 def test_document_text_is_not_copied_to_metadata(setup):
@@ -85,7 +85,7 @@ def test_load_demo_documents():
     path = Path(__file__).parents[1] / "data/demo_documents.json"
     documents = indexing.load_documents(path)
     assert len(documents) == 8
-    assert all(d["text"] and d["allowed_group_ids"] and d["version_id"] for d in documents)
+    assert all(d["text"] and d["version_id"] for d in documents)
 
 
 def test_explicit_version_is_kept(tmp_path):

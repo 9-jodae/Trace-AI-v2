@@ -35,12 +35,17 @@ async def search(query):
     return {"chunks": [CHUNK], "failed_sources": ["graph"] if "부분실패" in query else []}
 
 
+async def filter_context(chunks):
+    return chunks
+
+
 async def generate(question, context, history):
     return f"<img src=x onerror=\"document.body.dataset.xss='1'\"> 가짜 답변: {question}"
 
 
 graph.can_answer_probability = can_answer
 graph.search = search
+graph.filter_accessible_context = filter_context
 graph.generate_answer = generate
 
 

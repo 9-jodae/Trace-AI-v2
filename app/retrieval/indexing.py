@@ -18,20 +18,13 @@ def load_documents(path: Path) -> list[DocumentInput]:
             "version_id": item.get("version_id", item["doc_id"]),
             "text": item["text"],
             "source": item["title"],
-            "status": item["status"],
-            "allowed_group_ids": item["allowed_group_ids"],
         }
         for item in documents
     ]
 
 
 async def index_document(document: DocumentInput) -> int:
-    chunks = [
-        {**chunk, "status": document["status"], "allowed_group_ids": document["allowed_group_ids"]}
-        for chunk in chunk_document(
-            document["document_id"], document["version_id"], document["text"], document["source"]
-        )
-    ]
+    chunks = chunk_document(document["document_id"], document["version_id"], document["text"], document["source"])
     if not chunks:
         return 0
     embeddings = await embed_documents([chunk["text"] for chunk in chunks])

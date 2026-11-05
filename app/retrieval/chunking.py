@@ -1,3 +1,4 @@
+from hashlib import sha256
 from uuid import UUID, uuid5
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -43,6 +44,8 @@ def chunk_document(document_id: str, version_id: str, text: str, source: str) ->
                 "version_id": version_id,
                 "char_start": start,
                 "char_end": start + len(piece.page_content),
+                "chunk_index": index,
+                "content_hash": sha256(piece.page_content.encode()).hexdigest(),
             }
         )
     return chunks
