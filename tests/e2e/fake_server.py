@@ -44,6 +44,10 @@ async def generate(question, context, history):
     return f"<img src=x onerror=\"document.body.dataset.xss='1'\"> 가짜 답변: {question}"
 
 
+async def edit_request_probability(question):
+    return 0.0
+
+
 async def small_talk_probability(question):
     return 0.0
 
@@ -58,6 +62,7 @@ async def rewrite_query(question):
 
 graph.rewrite_search_query = rewrite_query
 graph.small_talk_probability = small_talk_probability
+graph.edit_request_probability = edit_request_probability
 graph.generate_reply_without_documents = generate_reply
 graph.can_answer_probability = can_answer
 graph.search = search

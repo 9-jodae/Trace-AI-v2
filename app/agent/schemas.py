@@ -55,6 +55,19 @@ class KeywordItem(CamelModel):
     text: str
 
 
+class EditProposalItem(CamelModel):
+    # TODO: 형식은 서버 계약에서 확정. 적용은 사용자가 고른다
+    chunk_id: str
+    source: str | None = None
+    document_id: str | None = None
+    version_id: str | None = None
+    before: str
+    after: str
+    reason: str
+    char_start: int | None = None
+    char_end: int | None = None
+
+
 class ChatResponse(CamelModel):
     thread_id: str
     answer: str
@@ -65,5 +78,6 @@ class ChatResponse(CamelModel):
     sources: list[SourceChunk]
     evidence: list[EvidenceQuote]
     keywords: list[KeywordItem]
+    edit_proposals: list[EditProposalItem] = []
     failed_sources: list[str]
     fallback_reason: str | None

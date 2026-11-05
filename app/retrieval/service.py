@@ -180,6 +180,10 @@ async def search(
     if not rankings:
         raise AiUnavailableError("벡터, 그래프, 전문 검색이 모두 실패했습니다.")
     chunks = rrf_fuse(rankings, CONTEXT_LIMIT)
+    # 본문은 PostgreSQL에만 있어 벡터와 전문 검색이 모두 실패하면 찾지 못한 것이 아니라 장애다.
+    # 그래프 후보가 비어 성공으로 끝나도 "문서 없음"으로 답하지 않는다
+    if not chunks and {"vector", "fulltext"} <= set(failed):
+        raise AiUnavailableError("문서 검색을 사용할 수 없습니다.")
     if chunks and isinstance(graph_store, Neo4jGraphStore) and config.graph_search_enabled():
         try:
             embedding = None if query_embedding.exception() else query_embedding.result()

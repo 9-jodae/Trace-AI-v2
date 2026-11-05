@@ -49,6 +49,7 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
         sources=result["context"],
         evidence=result["evidence"],
         keywords=result["keywords"],
+        edit_proposals=result.get("edit_proposals", []),
         failed_sources=result["failed_sources"],
         fallback_reason=result["fallback_reason"],
     )
