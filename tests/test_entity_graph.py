@@ -14,10 +14,11 @@ def make_chunk():
     }
 
 
-def test_entity_identity_is_stable_and_scoped_by_namespace():
-    assert entity_id("ORG_UNIT", "company-a", "재무팀") == entity_id("ORG_UNIT", "company-a", " 재무팀 ")
-    assert entity_id("ORG_UNIT", "company-a", "재무팀") != entity_id("ORG_UNIT", "company-b", "재무팀")
-    assert entity_id("ORG_UNIT", "company-a", "재무팀") != entity_id("PROCESS", "company-a", "재무팀")
+def test_entity_identity_is_stable_and_scoped_by_document_namespace_and_type():
+    assert entity_id("ORG_UNIT", "company-a", "doc-1", "재무팀") == entity_id("ORG_UNIT", "company-a", "doc-1", " 재무팀 ")
+    assert entity_id("ORG_UNIT", "company-a", "doc-1", "재무팀") != entity_id("ORG_UNIT", "company-a", "doc-2", "재무팀")
+    assert entity_id("ORG_UNIT", "company-a", "doc-1", "재무팀") != entity_id("ORG_UNIT", "company-b", "doc-1", "재무팀")
+    assert entity_id("ORG_UNIT", "company-a", "doc-1", "재무팀") != entity_id("PROCESS", "company-a", "doc-1", "재무팀")
 
 
 def test_mention_requires_exact_name_and_quote_within_chunk_offsets():
@@ -87,6 +88,25 @@ async def test_extraction_discards_ungrounded_mentions_and_non_actual_relations(
     assert {mention["surface_form"] for mention in mentions} == {"재무팀", "경비 정산"}
     assert len(assertions) == 1
     assert assertions[0]["predicate"] == "RESPONSIBLE_FOR"
+
+
+@pytest.mark.anyio
+async def test_extraction_rejects_canonical_name_not_grounded_by_surface_form(monkeypatch):
+    chunk = make_chunk()
+    response = {
+        "mentions": [
+            {"entity_type": "ORG_UNIT", "canonical_name": "재무본부", "surface_form": "재무팀", "quote": chunk["text"]},
+        ],
+        "assertions": [],
+    }
+
+    async def fake_response(_messages):
+        return json.dumps(response, ensure_ascii=False)
+
+    monkeypatch.setattr(entity_extraction, "generate_structured_response", fake_response)
+    mentions, assertions = await entity_extraction.extract_entity_graph("doc-1", "version-1", [chunk])
+    assert mentions == []
+    assert assertions == []
 
 
 @pytest.mark.anyio

@@ -93,7 +93,11 @@ async def extract_entity_graph(document_id: str, version_id: str, chunks: list[C
         for candidate in parsed.mentions:
             if candidate.surface_form not in candidate.quote or candidate.quote not in chunk["text"]:
                 continue
-            eid = entity_id(candidate.entity_type, NAMESPACE_ID, candidate.canonical_name)
+            # Alias/동의어 해소가 구현되기 전에는 canonical name이 원문 표면형과
+            # 정규화 후 같을 때만 저장해, 모델이 만든 이름으로 다른 Entity와 합치지 않는다.
+            if normalize_name(candidate.canonical_name) != normalize_name(candidate.surface_form):
+                continue
+            eid = entity_id(candidate.entity_type, NAMESPACE_ID, document_id, candidate.canonical_name)
             for quote_start, quote_end in _all_spans(chunk["text"], candidate.quote):
                 offset = 0
                 while (surface_start := candidate.quote.find(candidate.surface_form, offset)) >= 0:
@@ -110,6 +114,7 @@ async def extract_entity_graph(document_id: str, version_id: str, chunks: list[C
                         "evidence_quote": candidate.quote,
                     })
                     mention_lookup[(candidate.entity_type, normalize_name(candidate.canonical_name))] = eid
+                    mention_lookup[(candidate.entity_type, normalize_name(candidate.surface_form))] = eid
                     offset = surface_start + 1
         chunk_mentions = [m for m in chunk_mentions if mention_is_grounded(m, chunk)]
         mentions.extend(chunk_mentions)

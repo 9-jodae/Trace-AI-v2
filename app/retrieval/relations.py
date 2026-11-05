@@ -12,9 +12,12 @@ MIN_NAME_LENGTH = 2
 MAX_DOCUMENT_NAME_LENGTH = 200
 
 
-def entity_id(entity_type: EntityType, namespace_id: str, canonical_name: str) -> str:
-    """이름 정규화는 후보 키다. 서로 다른 namespace의 이름은 병합하지 않는다."""
-    return str(uuid5(NAMESPACE_URL, f"docs199:entity:v2:{namespace_id}:{entity_type}:{normalize_name(canonical_name)}"))
+def entity_id(entity_type: EntityType, namespace_id: str, document_id: str, canonical_name: str) -> str:
+    """같은 문서 안에서만 동일 이름 Entity를 묶고 문서 간 동명은 별도 후보로 둔다."""
+    return str(uuid5(
+        NAMESPACE_URL,
+        f"docs199:entity:v3:{namespace_id}:{document_id}:{entity_type}:{normalize_name(canonical_name)}",
+    ))
 
 
 def mention_is_grounded(mention: dict, chunk: Chunk) -> bool:
