@@ -288,3 +288,50 @@ class TestFollowUpSearch:
     def test_first_question_stays_unchanged(self, client, ai):
         client.post(URL, json={"message": "그럼 영수증은?"})
         assert ai.search_calls == ["그럼 영수증은?"]
+
+
+CLARIFY = (
+    '{"answer": "숙박비와 할인 중 어느 쪽인가요?", '
+    '"options": [{"label": "숙박비", "chunk": 1}, {"label": "할인", "chunk": 2}]}'
+)
+
+
+class TestClarification:
+    @pytest.fixture
+    def clarifying(self, ai, monkeypatch):
+        responses = [CLARIFY]
+
+        async def generate(question, context, history):
+            ai.llm_calls.append({"question": question, "history": [message.text for message in history]})
+            return responses.pop(0) if responses else '{"answer": "최종 답"}'
+
+        monkeypatch.setattr(graph, "generate_answer", generate)
+        ai.responses = responses
+        return ai
+
+    def test_returns_question_without_sources(self, client, clarifying):
+        body = client.post(URL, json={"message": "한도가 얼마야?", "threadId": "c"}).json()
+        assert body["answer"] == "숙박비와 할인 중 어느 쪽인가요?"
+        assert body["sources"] == [] and body["evidence"] == [] and body["route"] == "SEARCH"
+
+    def test_next_reply_searches_with_previous_question(self, client, clarifying):
+        client.post(URL, json={"message": "한도가 얼마야?", "threadId": "c"})
+        body = client.post(URL, json={"message": "숙박비요", "threadId": "c"}).json()
+        assert clarifying.search_calls[-1] == "한도가 얼마야?\n숙박비요"
+        assert clarifying.llm_calls[-1]["question"] == "숙박비요"
+        assert clarifying.jev_calls == [] and body["answer"] == "최종 답"
+
+    def test_repeated_clarification_is_not_marked_again(self, client, clarifying):
+        clarifying.responses.append(CLARIFY)
+        client.post(URL, json={"message": "한도가 얼마야?", "threadId": "c"})
+        body = client.post(URL, json={"message": "글쎄", "threadId": "c"}).json()
+        assert body["sources"] != []
+        clarifying.probability = 0.1
+        client.post(URL, json={"message": "다른 질문", "threadId": "c"})
+        assert clarifying.search_calls[-1] == "다른 질문"
+
+    def test_no_context_does_not_clarify(self, client, ai):
+        ai.search_result = {"chunks": [], "failed_sources": []}
+        body = client.post(URL, json={"message": "한도가 얼마야?"}).json()
+        assert body["answer"] == graph.NO_EVIDENCE_ANSWER and ai.llm_calls == []
+        assert ai.reply_calls == ["한도가 얼마야?"]
