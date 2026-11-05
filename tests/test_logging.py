@@ -82,6 +82,9 @@ def test_search_failure_log_has_no_exception_text(monkeypatch, caplog):
             return set()
 
     class Empty:
+        async def search_from_entities(self, value, limit):
+            return []
+
         async def seed_documents(self, value):
             return []
 

@@ -4,6 +4,7 @@ import json
 import logging
 from pathlib import Path
 
+from app.core import config
 from app.retrieval.chunking import chunk_document
 from app.retrieval.embedding import embed_documents
 from app.retrieval.entity_extraction import extract_entity_graph
@@ -50,9 +51,12 @@ async def index_document(
         document["document_id"], document["source"], document_names(document), chunks
     )
     if isinstance(graph_store, Neo4jGraphStore):
-        mentions, assertions = await extract_entity_graph(
-            document["document_id"], document["version_id"], chunks
-        )
+        # 추출을 꺼도 교체는 실행해, 켰을 때 저장한 관계와 인용이 남지 않게 한다
+        mentions, assertions = [], []
+        if config.entity_extraction_enabled():
+            mentions, assertions = await extract_entity_graph(
+                document["document_id"], document["version_id"], chunks
+            )
         await graph_store.replace_entity_graph(document["document_id"], document["version_id"], mentions, assertions)
     if update_references:
         catalog = reference_catalog or await _reference_catalog(graph_store)

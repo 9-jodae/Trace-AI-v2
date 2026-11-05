@@ -48,6 +48,9 @@ class FakeStore:
             raise self.error
         return ["doc"] if self.result else []
 
+    async def search_from_entities(self, query, limit):
+        return getattr(self, "entity_chunks", [])
+
     async def search_from_documents(self, document_ids, limit):
         self.expansion_calls.append((document_ids, limit))
         return [item["id"] if isinstance(item, dict) else item for item in self.result[:limit]]
@@ -440,4 +443,15 @@ def test_app_shutdown_closes_stores(monkeypatch):
     with TestClient(main.create_app()):
         assert closed == []
     assert closed == [True]
+
+
+class TestEntityChunks:
+    def test_entity_chunks_are_fetched_without_document_seed(self, stores):
+        vector = FakeStore([])
+        graph = FakeStore([])
+        graph.entity_chunks = ["chunk-a"]
+        vector.result = []
+        stores(vector, graph)
+        asyncio.run(service.search("재무팀 담당", None, SCOPE))
+        assert vector.filter_calls[-1][0] == ["chunk-a"] and vector.document_calls == []
 

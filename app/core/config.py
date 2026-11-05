@@ -64,6 +64,11 @@ def neo4j_password() -> str | None:
     return os.getenv("NEO4J_PASSWORD") or None
 
 
+def entity_extraction_enabled() -> bool:
+    """켜면 적재할 때 청크마다 본문을 LLM으로 보낸다. 외부 전송 범위를 정한 뒤에만 켠다."""
+    return os.getenv("ENTITY_EXTRACTION_ENABLED", "").strip().lower() == "true"
+
+
 def neo4j_database() -> str | None:
     return os.getenv("NEO4J_DATABASE") or None
 

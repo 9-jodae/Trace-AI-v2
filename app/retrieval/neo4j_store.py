@@ -10,7 +10,7 @@ QUERY_TIMEOUT_SECONDS = 5
 MIN_NAME_LENGTH = 2
 CHUNKS_PER_DOCUMENT_LIMIT = 5
 
-# Neo4j에는 본문과 권한을 두지 않고 문서·청크 위치와 참조 관계만 저장한다.
+# Neo4j에는 권한과 문서 전체를 두지 않는다. 엔티티 관계의 근거 인용은 위치와 함께 저장한다.
 SCHEMA_STATEMENTS = (
     "CREATE CONSTRAINT document_id IF NOT EXISTS FOR (d:Document) REQUIRE d.document_id IS UNIQUE",
     "CREATE CONSTRAINT chunk_id IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE",
@@ -90,7 +90,7 @@ MATCH (d:Document {document_id: $document_id})
 OPTIONAL MATCH (d)-[:HAS_CHUNK]->(old_chunk:Chunk {version_id: $version_id})-[m:MENTIONS]->()
 DELETE m
 WITH d
-OPTIONAL MATCH (d)-[:HAS_ASSERTION]->(old:RelationAssertion {source_version_id: $version_id})
+OPTIONAL MATCH (d)-[:HAS_ASSERTION]->(old:RelationAssertion)
 DETACH DELETE old
 WITH d
 UNWIND $mentions AS mention
@@ -198,12 +198,10 @@ class Neo4jGraphStore:
         if predicates:
             rows = await self._read(
                 ASSERTION_EVIDENCE_SEARCH_CYPHER,
-                entity_ids=entity_ids,
-                predicates=predicates,
-                limit=limit,
+                {"entity_ids": entity_ids, "predicates": predicates, "limit": limit},
             )
             evidence_ids = [row["id"] for row in rows]
-        rows = await self._read(ENTITY_MENTION_SEARCH_CYPHER, entity_ids=entity_ids, limit=limit)
+        rows = await self._read(ENTITY_MENTION_SEARCH_CYPHER, {"entity_ids": entity_ids, "limit": limit})
         mention_ids = [row["id"] for row in rows]
         return list(dict.fromkeys([*evidence_ids, *mention_ids]))[:limit]
 

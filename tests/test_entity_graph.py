@@ -87,3 +87,55 @@ async def test_extraction_discards_ungrounded_mentions_and_non_actual_relations(
     assert {mention["surface_form"] for mention in mentions} == {"재무팀", "경비 정산"}
     assert len(assertions) == 1
     assert assertions[0]["predicate"] == "RESPONSIBLE_FOR"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("raw", ["설명만 있음", '{"mentions": [', '{"mentions": [{"entity_type": "없는값"}]}'])
+async def test_bad_response_skips_chunk(monkeypatch, raw):
+    async def fake_response(_messages):
+        return raw
+
+    monkeypatch.setattr(entity_extraction, "generate_structured_response", fake_response)
+    assert await entity_extraction.extract_entity_graph("doc-1", "version-1", [make_chunk()]) == ([], [])
+
+
+@pytest.mark.anyio
+async def test_code_block_response_is_parsed(monkeypatch):
+    chunk = make_chunk()
+    mention = {"entity_type": "ORG_UNIT", "canonical_name": "재무팀", "surface_form": "재무팀", "quote": chunk["text"]}
+
+    async def fake_response(_messages):
+        return "```json\n" + json.dumps({"mentions": [mention]}, ensure_ascii=False) + "\n```"
+
+    monkeypatch.setattr(entity_extraction, "generate_structured_response", fake_response)
+    mentions, _ = await entity_extraction.extract_entity_graph("doc-1", "version-1", [chunk])
+    assert [item["surface_form"] for item in mentions] == ["재무팀"]
+
+
+@pytest.mark.anyio
+async def test_unverified_condition_quote_is_dropped(monkeypatch):
+    chunk = make_chunk()
+    names = [("재무팀", "ORG_UNIT"), ("경비 정산", "PROCESS")]
+    mentions = [
+        {"entity_type": kind, "canonical_name": name, "surface_form": name, "quote": chunk["text"]}
+        for name, kind in names
+    ]
+    assertion = {
+        "subject_name": "재무팀", "subject_type": "ORG_UNIT", "predicate": "RESPONSIBLE_FOR",
+        "object_name": "경비 정산", "object_type": "PROCESS", "quote": chunk["text"],
+        "polarity": "AFFIRMED", "modality": "ACTUAL", "condition_quote": "원문에 없는 조건",
+    }
+
+    async def fake_response(_messages):
+        return json.dumps({"mentions": mentions, "assertions": [assertion]}, ensure_ascii=False)
+
+    monkeypatch.setattr(entity_extraction, "generate_structured_response", fake_response)
+    _, assertions = await entity_extraction.extract_entity_graph("doc-1", "version-1", [chunk])
+    assert assertions == []
+
+
+def test_replace_removes_assertions_of_every_version():
+    from app.retrieval.neo4j_store import REPLACE_ENTITY_GRAPH_CYPHER
+
+    assert "(old:RelationAssertion)" in REPLACE_ENTITY_GRAPH_CYPHER
+

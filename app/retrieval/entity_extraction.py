@@ -1,9 +1,11 @@
 import json
+import logging
 from uuid import NAMESPACE_URL, uuid5
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.core.errors import AiUnavailableError
 from app.llm.client import generate_structured_response
 from app.retrieval.relations import entity_id, mention_is_grounded, normalize_name, validate_assertion
 from app.retrieval.schemas import (
@@ -15,6 +17,8 @@ from app.retrieval.schemas import (
     RelationAssertion,
     RelationPredicate,
 )
+
+logger = logging.getLogger(__name__)
 
 NAMESPACE_ID = "docs199"
 
@@ -47,6 +51,12 @@ class _Extraction(_StrictModel):
     assertions: list[_AssertionCandidate] = Field(default_factory=list, max_length=40)
 
 
+def _parse_extraction(raw: str) -> _Extraction:
+    # 모델이 코드 블록이나 설명을 덧붙여도 JSON만 읽는다
+    data, _ = json.JSONDecoder(strict=False).raw_decode(raw, raw.index("{"))
+    return _Extraction.model_validate(data)
+
+
 def _all_spans(text: str, value: str):
     start = 0
     while (position := text.find(value, start)) >= 0:
@@ -72,8 +82,13 @@ async def extract_entity_graph(document_id: str, version_id: str, chunks: list[C
             "assertions:[{subject_name,subject_type,predicate,object_name,object_type,quote,"
             "polarity,modality,condition_quote}]}"
         )
-        raw = await generate_structured_response([SystemMessage(content=prompt), HumanMessage(content=payload)])
-        parsed = _Extraction.model_validate_json(raw)
+        # 청크 하나의 추출이 실패해도 적재와 참조 갱신은 끝까지 진행한다. 응답 본문은 기록하지 않는다
+        try:
+            raw = await generate_structured_response([SystemMessage(content=prompt), HumanMessage(content=payload)])
+            parsed = _parse_extraction(raw)
+        except (AiUnavailableError, ValueError, ValidationError) as exc:
+            logger.warning("Entity extraction skipped a chunk: %s", type(exc).__name__)
+            continue
         mention_lookup: dict[tuple[str, str], str] = {}
         for candidate in parsed.mentions:
             if candidate.surface_form not in candidate.quote or candidate.quote not in chunk["text"]:
@@ -105,6 +120,8 @@ async def extract_entity_graph(document_id: str, version_id: str, chunks: list[C
             if subject_key not in mention_lookup or object_key not in mention_lookup:
                 continue
             if candidate.quote not in chunk["text"]:
+                continue
+            if candidate.condition_quote and candidate.condition_quote not in chunk["text"]:
                 continue
             start_at = int(chunk.get("char_start", 0))
             for local_start, local_end in _all_spans(chunk["text"], candidate.quote):
