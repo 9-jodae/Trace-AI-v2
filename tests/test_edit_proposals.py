@@ -14,6 +14,11 @@ TEXT = f"앞 문장이다. {BEFORE} 뒤 문장이다."
 CONTEXT = [{**chunk("c1", TEXT), "source": "연차 지침", "document_id": "d1", "version_id": "v1", "char_start": 100}]
 
 
+@pytest.fixture(autouse=True)
+def proposals_enabled(monkeypatch):
+    monkeypatch.setenv("EDIT_PROPOSALS_ENABLED", "true")
+
+
 def edit(**values):
     return {"chunk": 1, "before": BEFORE, "after": "이월은 최대 5일이다.", "reason": "취업규칙에 맞춤", **values}
 

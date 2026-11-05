@@ -80,6 +80,11 @@ NO_DOCUMENT_PROMPT = f"""사내 문서 도우미로 대화한다. 지금은 문�
 다음 형식의 JSON 객체 하나만 응답한다. clarification은 되물을 때만 true로 쓴다.
 {{"answer": "답변", "clarification": false}}"""
 # 수정 요청일 때만 답변 호출에 덧붙인다. 모델은 제안만 하고 적용은 사용자가 고른다
+# 수정안 기능을 끈 동안 수정 요청에 쓴다. 문서를 고친 것처럼 보이지 않게 한다
+EDIT_UNSUPPORTED_INSTRUCTION = """이번 말은 문서 수정 요청이지만 이 서비스는 문서를 고치거나 수정안을 만들지 않는다.
+- answer 첫 문장에 문서 수정은 지원하지 않는다고 쓴다.
+- 이어서 컨텍스트에서 요청과 관련된 현재 값과, 문서끼리 값이 다르면 그 차이만 알려 준다.
+- 바꾼 문장을 만들거나 이미 고쳤다고 쓰지 않는다."""
 EDIT_REQUEST_INSTRUCTION = """이번 말은 문서 수정 요청이다. 문서를 고치지 말고 수정안만 제안한다.
 - answer에는 무엇을 왜 바꾸는지 한두 문장만 쓴다. 바꿀 문장과 바꾼 문장은 answer에 쓰지 않는다.
   edits의 문장은 원문과 맞춰 본 뒤 답변 아래에 따로 붙는다. 이미 고쳤다고 쓰지 않는다.
@@ -153,6 +158,7 @@ def build_prompt(
     registered_conflicts: list[RegisteredConflict] | None = None,
     skipped_conflicts: int = 0,
     filters_applied: bool = False,
+    edit_unsupported: bool = False,
 ) -> str:
     chunks = "\n".join(
         f"{number}. [{_neutralize_tags(chunk['source'] or '출처 미상')}] {_neutralize_tags(chunk['text'])}"
@@ -161,6 +167,8 @@ def build_prompt(
     prompt = f"<context>\n{chunks}\n</context>\n\n질문: {question}"
     if edit_request:
         prompt = f"{prompt}\n\n{EDIT_REQUEST_INSTRUCTION}"
+    if edit_unsupported:
+        prompt = f"{prompt}\n\n{EDIT_UNSUPPORTED_INSTRUCTION}"
     if conflict_scan:
         prompt = f"{prompt}\n\n{CONFLICT_SCAN_INSTRUCTION}"
     if registered_conflicts:
@@ -194,6 +202,7 @@ async def generate_answer(
     registered_conflicts: list[RegisteredConflict] | None = None,
     skipped_conflicts: int = 0,
     filters_applied: bool = False,
+    edit_unsupported: bool = False,
 ) -> str:
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),
@@ -208,6 +217,7 @@ async def generate_answer(
                 registered_conflicts,
                 skipped_conflicts,
                 filters_applied,
+                edit_unsupported,
             )
         ),
     ]
