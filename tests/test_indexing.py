@@ -18,7 +18,10 @@ DOCUMENT = {
 
 @pytest.fixture
 def setup(monkeypatch):
-    state = {"embedded": [], "vector": [], "graph": [], "closed": 0, "current": True, "stored": True}
+    state = {
+        "embedded": [], "vector": [], "graph": [], "references": [], "catalog": [], "closed": 0,
+        "current": True, "stored": True,
+    }
 
     async def embed(texts):
         state["embedded"].append(texts)
@@ -32,9 +35,25 @@ def setup(monkeypatch):
             state["vector"].append((version_id, chunks, embeddings))
             return state["stored"]
 
+        async def replace_document_topics(self, version_id, topics):
+            state.setdefault("topics", []).append((version_id, topics))
+
     class Graph:
-        async def replace_version(self, version_id, document_id, document, chunks):
-            state["graph"].append((version_id, document_id, document, chunks))
+        async def replace_document(self, document_id, source, names, chunks):
+            state["graph"].append((document_id, source, names, chunks))
+            state["catalog"] = [item for item in state["catalog"] if item["document_id"] != document_id]
+            state["catalog"].append({"document_id": document_id, "source": source})
+
+        async def replace_references(self, document_id, links):
+            existing = {item["document_id"] for item in state["catalog"]}
+            available = [link for link in links if link["target_document_id"] in existing]
+            state["references"].append((document_id, available))
+
+        async def list_document_catalog(self):
+            return state["catalog"]
+
+        async def replace_entity_graph(self, document_id, version_id, mentions, assertions):
+            state["entities"] = (document_id, version_id, mentions, assertions)
 
     async def close():
         state["closed"] += 1
@@ -46,12 +65,13 @@ def setup(monkeypatch):
 
 
 def test_chunks_embeds_and_writes_both_stores(setup):
-    count = asyncio.run(indexing.index_document(DOCUMENT))
+    asyncio.run(indexing.index_document(DOCUMENT))
     version, chunks, embeddings = setup["vector"][0]
-    assert count == len(chunks) == len(embeddings) > 1
+    assert len(chunks) == len(embeddings) > 1
     assert version == "ver"
-    graph_version, document_id, metadata, graph_chunks = setup["graph"][0]
-    assert (graph_version, document_id) == ("ver", "doc") and graph_chunks == chunks
+    document_id, source, names, graph_chunks = setup["graph"][0]
+    assert (document_id, source, names) == ("doc", "규정", ["규정"])
+    assert graph_chunks == chunks
 
 
 def test_embeds_chunk_text(setup):
@@ -68,11 +88,11 @@ def test_chunks_carry_server_columns(setup):
 
 def test_document_text_is_not_copied_to_metadata(setup):
     asyncio.run(indexing.index_document(DOCUMENT))
-    assert "text" not in setup["graph"][0][2]
+    assert DOC_TEXT not in repr(setup["graph"][0])
 
 
 def test_blank_document_does_not_touch_stores(setup):
-    assert asyncio.run(indexing.index_document({**DOCUMENT, "text": "   "})) == 0
+    assert asyncio.run(indexing.index_document({**DOCUMENT, "text": "   "})) == []
     assert setup["vector"] == [] and setup["graph"] == [] and setup["embedded"] == []
 
 
@@ -103,18 +123,142 @@ def test_index_file_indexes_all_and_closes(setup):
     path = Path(__file__).parents[1] / "data/demo_documents.json"
     assert asyncio.run(indexing.index_file(path)) > 0
     assert len(setup["vector"]) == 8 and setup["closed"] == 1
+    assert len(setup["references"]) == 8
+
+
+def test_index_file_resolves_explicit_reference_after_all_documents_exist(setup, monkeypatch, tmp_path):
+    source = {
+        "document_id": "source",
+        "version_id": "source-v1",
+        "source": "출장 신청 안내.pdf",
+        "text": "출장 신청 안내\n경비는 《경비 처리 절차》를 따릅니다.",
+    }
+    target = {
+        "document_id": "target",
+        "version_id": "target-v1",
+        "source": "경비 처리 절차.pdf",
+        "text": "경비 처리 절차\n영수증을 첨부합니다.",
+    }
+    monkeypatch.setattr(indexing, "load_documents", lambda path: [source, target])
+    count = asyncio.run(indexing.index_file(tmp_path / "documents.json"))
+    assert count > 0
+    source_links = next(links for document_id, links in setup["references"] if document_id == "source")
+    assert source_links == [{
+        "source_document_id": "source",
+        "target_document_id": "target",
+        "chunk_id": setup["graph"][0][3][0]["id"],
+    }]
+
+
+def test_partial_file_uses_existing_graph_catalog_for_cross_file_reference(setup, monkeypatch, tmp_path):
+    source = {
+        "document_id": "source",
+        "version_id": "source-v1",
+        "source": "출장 신청 안내.pdf",
+        "text": "본문 첫 줄은 제목이 아닙니다.\n《경비 처리 절차》를 참조합니다.",
+    }
+    setup["catalog"] = [{"document_id": "target", "source": "경비 처리 절차.pdf"}]
+    monkeypatch.setattr(indexing, "load_documents", lambda path: [source])
+
+    asyncio.run(indexing.index_file(tmp_path / "partial.json"))
+
+    assert setup["references"] == [("source", [{
+        "source_document_id": "source",
+        "target_document_id": "target",
+        "chunk_id": setup["graph"][0][3][0]["id"],
+    }])]
+    assert "본문 첫 줄은 제목이 아닙니다." not in repr(setup["graph"][0][2])
+
+
+def test_index_file_continues_after_one_document_fails(setup, monkeypatch, tmp_path, caplog):
+    first = {**DOCUMENT, "document_id": "bad", "version_id": "bad-v1", "text": "민감 본문 A"}
+    second = {**DOCUMENT, "document_id": "good", "version_id": "good-v1", "text": "공개 본문 B"}
+    monkeypatch.setattr(indexing, "load_documents", lambda path: [first, second])
+
+    async def embed(texts):
+        if "민감 본문 A" in texts[0]:
+            raise RuntimeError("민감 본문 A를 포함한 예외")
+        return [[0.1] for _ in texts]
+
+    monkeypatch.setattr(indexing, "embed_documents", embed)
+    with pytest.raises(RuntimeError, match="1개 문서 적재에 실패했습니다"):
+        asyncio.run(indexing.index_file(tmp_path / "partial.json"))
+
+    assert [item[0] for item in setup["vector"]] == ["good-v1"]
+    assert [item[0] for item in setup["graph"]] == ["good"]
+    assert "민감 본문 A" not in caplog.text
 
 
 class TestStaleVersion:
     def test_stale_document_skips_embedding_and_stores(self, setup, caplog):
         setup["current"] = False
-        assert asyncio.run(indexing.index_document(DOCUMENT)) == 0
+        assert asyncio.run(indexing.index_document(DOCUMENT)) == []
         assert setup["embedded"] == [] and setup["vector"] == [] and setup["graph"] == []
         assert "not the current version" in caplog.text and DOC_TEXT not in caplog.text
 
     def test_version_changed_during_embedding_skips_graph(self, setup, caplog):
         setup["stored"] = False
-        assert asyncio.run(indexing.index_document(DOCUMENT)) == 0
+        assert asyncio.run(indexing.index_document(DOCUMENT)) == []
         assert len(setup["vector"]) == 1 and setup["graph"] == []
         assert "version changed" in caplog.text
 
+
+class TestEntityExtractionSwitch:
+    @pytest.fixture
+    def extraction(self, setup, monkeypatch):
+        calls = []
+
+        async def extract(document_id, version_id, chunks):
+            calls.append(document_id)
+            return [], []
+
+        # 테스트 저장소도 Neo4j 저장소처럼 보이게 한다
+        monkeypatch.setattr(indexing, "Neo4jGraphStore", object)
+        monkeypatch.setattr(indexing, "extract_entity_graph", extract)
+        return calls
+
+    def test_is_off_by_default(self, setup, extraction):
+        asyncio.run(indexing.index_document(DOCUMENT))
+        # 이전에 저장한 관계를 지우도록 빈 값으로 교체한다
+        assert extraction == [] and setup["entities"] == ("doc", "ver", [], [])
+
+    def test_runs_when_enabled(self, setup, extraction, monkeypatch):
+        monkeypatch.setenv("ENTITY_EXTRACTION_ENABLED", "true")
+        asyncio.run(indexing.index_document(DOCUMENT))
+        assert extraction == ["doc"] and setup["entities"] == ("doc", "ver", [], [])
+
+
+class TestDocumentTopics:
+    @pytest.fixture
+    def topics(self, setup, monkeypatch):
+        calls = []
+
+        async def extract(document, existing):
+            calls.append((document["document_id"], list(existing)))
+            return setup.get("next_topics", ["연차"])
+
+        monkeypatch.setattr(indexing, "extract_document_topics", extract)
+        return calls
+
+    def test_off_by_default_does_not_touch_table(self, setup, topics):
+        asyncio.run(indexing.index_document(DOCUMENT))
+        assert topics == [] and "topics" not in setup
+
+    def test_enabled_saves_topics_by_version(self, setup, topics, monkeypatch):
+        monkeypatch.setenv("DOCUMENT_TOPICS_ENABLED", "true")
+        known = ["보안"]
+        asyncio.run(indexing.index_document(DOCUMENT, known_topics=known))
+        assert topics == [("doc", ["보안"])] and setup["topics"] == [("ver", ["연차"])]
+        assert known == ["보안", "연차"]
+
+    def test_failure_keeps_existing_topics(self, setup, topics, monkeypatch):
+        monkeypatch.setenv("DOCUMENT_TOPICS_ENABLED", "true")
+        setup["next_topics"] = None
+        asyncio.run(indexing.index_document(DOCUMENT))
+        assert "topics" not in setup
+
+    def test_empty_topics_replace_existing(self, setup, topics, monkeypatch):
+        monkeypatch.setenv("DOCUMENT_TOPICS_ENABLED", "true")
+        setup["next_topics"] = []
+        asyncio.run(indexing.index_document(DOCUMENT))
+        assert setup["topics"] == [("ver", [])]

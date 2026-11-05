@@ -1,13 +1,12 @@
-"""Neo4j는 이 환경에서 실행할 수 없어 전달하는 쿼리와 인자만 대역으로 확인한다."""
+"""Neo4j stores only graph identifiers; driver calls are checked with a test double."""
 
 import asyncio
 import inspect
 
-import pytest
 from neo4j import AsyncManagedTransaction, AsyncSession
 
 from app.retrieval import neo4j_store
-from app.retrieval.neo4j_store import Neo4jGraphStore, build_fulltext_query
+from app.retrieval.neo4j_store import Neo4jGraphStore, name_in_query
 
 
 class FakeResult:
@@ -36,9 +35,14 @@ class FakeSession:
         pass
 
     async def run(self, query, parameters=None, **params):
-        # 실제 드라이버와 같은 시그니처여야 키워드 충돌을 잡을 수 있다
-        self.driver.calls.append((query, {**(parameters or {}), **params}))
-        return FakeResult(self.driver.rows)
+        call_params = {**(parameters or {}), **params}
+        self.driver.calls.append((query, call_params))
+        query_text = getattr(query, "text", query)
+        if query_text == neo4j_store.SEEDS_CYPHER:
+            return FakeResult(self.driver.seeds)
+        if query_text == neo4j_store.REFERENCE_SEARCH_CYPHER:
+            return FakeResult(self.driver.results)
+        return FakeResult()
 
     async def execute_write(self, work):
         self.driver.transactions += 1
@@ -46,8 +50,9 @@ class FakeSession:
 
 
 class FakeDriver:
-    def __init__(self, rows=()):
-        self.rows = rows
+    def __init__(self, seeds=(), results=()):
+        self.seeds = seeds
+        self.results = results
         self.calls = []
         self.transactions = 0
         self.closed = False
@@ -60,64 +65,96 @@ class FakeDriver:
         self.closed = True
 
 
-class TestFulltextQuery:
-    @pytest.mark.parametrize(
-        "text, expected",
-        [
-            ("E4012 오류", '"E4012" OR "오류"'),
-            ('a" OR b:*', '"a" OR "OR" OR "b"'),
-            ("!!! ???", ""),
+def test_name_match_requires_complete_ascii_word_but_allows_korean_particles():
+    assert name_in_query("API", "api 문서")
+    assert not name_in_query("API", "Rapid API-like")
+    assert name_in_query("출장 신청 안내", "출장 신청 안내 관련 문서")
+    assert name_in_query("출장 신청 안내", "출장신청안내 관련 문서")
+
+
+def test_search_matches_known_names_then_returns_only_chunk_ids():
+    driver = FakeDriver(
+        seeds=[
+            {"id": "doc-a", "source": "출장 신청 안내"},
+            {"id": "doc-short", "source": "IT"},
         ],
+        results=[{"id": "chunk-1"}, {"id": "chunk-2"}],
     )
-    def test_builds_escaped_or_query(self, text, expected):
-        assert build_fulltext_query(text) == expected
-
-    def test_limits_terms(self):
-        assert build_fulltext_query(" ".join(str(i) for i in range(50))).count(" OR ") == 11
-
-
-class TestSearch:
-    def test_passes_query_and_limit(self):
-        driver = FakeDriver(rows=[{"id": "a", "text": "내용"}])
-        result = asyncio.run(Neo4jGraphStore(driver, "db").search("재택근무", 3))
-        assert result == [{"id": "a", "text": "내용"}]
-        query, params = driver.calls[0]
-        assert params == {"query": '"재택근무"', "limit": 3}
-        assert query.timeout == neo4j_store.QUERY_TIMEOUT_SECONDS
-        assert driver.database == "db"
-
-    def test_query_without_terms_makes_no_query(self):
-        driver = FakeDriver()
-        assert asyncio.run(Neo4jGraphStore(driver).search("!!!", 3)) == []
-        assert driver.calls == []
-
-    def test_user_text_is_never_in_cypher(self):
-        driver = FakeDriver()
-        asyncio.run(Neo4jGraphStore(driver).search("DETACH DELETE", 3))
-        assert "DETACH" not in driver.calls[0][0].text
+    store = Neo4jGraphStore(driver, "db")
+    seeds = asyncio.run(store.seed_documents("출장 신청 안내 관련 경비"))
+    result = asyncio.run(store.search_from_documents(seeds, 50))
+    assert result == ["chunk-1", "chunk-2"]
+    assert len(driver.calls) == 2
+    query, params = driver.calls[1]
+    assert query.text == neo4j_store.REFERENCE_SEARCH_CYPHER
+    assert query.timeout == neo4j_store.QUERY_TIMEOUT_SECONDS
+    assert params == {
+        "documents": ["doc-a"],
+        "limit": 50,
+        "per_document_limit": neo4j_store.CHUNKS_PER_DOCUMENT_LIMIT,
+    }
+    assert driver.database == "db"
 
 
-class TestReplaceVersion:
-    def test_runs_delete_merge_create_in_one_transaction(self):
-        driver = FakeDriver()
-        chunks = [{"id": "a", "text": "내용"}]
-        document = {"document_id": "doc", "source": "규정"}
-        asyncio.run(Neo4jGraphStore(driver).replace_version("ver", "doc", document, chunks))
-        assert driver.transactions == 1
-        queries = [call[0] for call in driver.calls if isinstance(call[0], str)]
-        written = queries[-3:]
-        assert "DETACH DELETE" in written[0] and "MERGE (d:Document" in written[1] and "UNWIND $chunks" in written[2]
-        assert driver.calls[-3][1] == {"version_id": "ver"}
-        assert driver.calls[-1][1] == {"document_id": "doc", "chunks": chunks}
+def test_unmatched_question_does_not_run_graph_traversal():
+    driver = FakeDriver(seeds=[{"id": "doc-a", "source": "출장 신청 안내"}])
+    assert asyncio.run(Neo4jGraphStore(driver).seed_documents("일반적인 질문")) == []
+    assert len(driver.calls) == 1
 
-    def test_delete_is_scoped_to_version(self):
-        assert "{version_id: $version_id}" in neo4j_store.DELETE_VERSION_CYPHER
 
-    def test_schema_is_created_first(self):
-        driver = FakeDriver()
-        asyncio.run(Neo4jGraphStore(driver).replace_version("v", "d", {}, []))
-        assert [call[0] for call in driver.calls[:4]] == list(neo4j_store.SCHEMA_STATEMENTS)
-        assert "awaitIndex" in neo4j_store.SCHEMA_STATEMENTS[-1]
+def test_query_text_is_not_interpolated_into_cypher():
+    driver = FakeDriver(seeds=[{"id": "doc-a", "source": "출장 안내"}], results=[])
+    store = Neo4jGraphStore(driver)
+    seeds = asyncio.run(store.seed_documents("출장 안내\") DETACH DELETE"))
+    asyncio.run(store.search_from_documents(seeds, 10))
+    assert all("DETACH DELETE" not in str(query) for query, _ in driver.calls)
+    assert driver.calls[-1][1]["documents"] == ["doc-a"]
+
+
+def test_reference_traversal_is_one_hop_bounded_and_returns_no_content():
+    query = neo4j_store.REFERENCE_SEARCH_CYPHER
+    assert "REFERENCES" in query and "LIMIT $limit" in query
+    assert "2.." not in query and "c.text" not in query and "quote" not in query
+    assert "collect(id)[0..$per_document_limit]" in query
+    assert "ORDER BY priority, document_id, chunk_index" in query
+    assert "0 AS priority" in query and "1 AS priority" in query and "2 AS priority" in query
+
+
+def test_replace_document_persists_only_identifiers_and_offsets():
+    driver = FakeDriver()
+    chunks = [{
+        "id": "c1", "text": "PRIVATE BODY", "version_id": "v1", "chunk_index": 0,
+        "char_start": 0, "char_end": 12,
+    }]
+    asyncio.run(Neo4jGraphStore(driver).replace_document("d1", "Title", ["title"], chunks))
+    assert driver.transactions == 1
+    writes = [
+        (getattr(query, "text", query), params)
+        for query, params in driver.calls
+        if getattr(query, "text", query) not in neo4j_store.SCHEMA_STATEMENTS
+    ]
+    created = next(params for query, params in writes if "UNWIND $chunks" in query)
+    expected = {
+        "document_id": "d1",
+        "chunks": [{"id": "c1", "version_id": "v1", "chunk_index": 0, "char_start": 0, "char_end": 12}],
+    }
+    assert created == expected
+    assert all("PRIVATE BODY" not in repr(params) for _, params in driver.calls)
+
+
+def test_replace_references_stores_only_document_and_chunk_ids():
+    driver = FakeDriver()
+    links = [{"source_document_id": "a", "target_document_id": "b", "chunk_id": "c1"}]
+    asyncio.run(Neo4jGraphStore(driver).replace_references("a", links))
+    assert driver.transactions == 1
+    assert driver.calls[-2][1] == {"document_id": "a"}
+    assert driver.calls[-1][1] == {"links": links}
+    assert "quote" not in repr(driver.calls[-1][1])
+
+
+def test_schema_does_not_create_content_fulltext_index():
+    assert all("FULLTEXT" not in statement for statement in neo4j_store.SCHEMA_STATEMENTS)
+    assert all("text" not in statement for statement in neo4j_store.SCHEMA_STATEMENTS)
 
 
 def test_close_closes_driver():
@@ -130,4 +167,38 @@ def test_fake_session_matches_real_driver_signature():
     for real in (AsyncSession.run, AsyncManagedTransaction.run):
         names = list(inspect.signature(real).parameters)
         assert names[:3] == list(inspect.signature(FakeSession.run).parameters)[:3]
+
+
+def test_search_from_entities_runs_with_query_parameters():
+    class Driver(FakeDriver):
+        pass
+
+    driver = Driver()
+    store = Neo4jGraphStore(driver)
+    catalog = [{"entity_id": "e1", "name": "재무팀"}]
+    rows = {"ENTITY": catalog}
+
+    async def read(statement, parameters):
+        driver.calls.append((statement, parameters))
+        return rows["ENTITY"] if statement == neo4j_store.ENTITY_CATALOG_CYPHER else [{"id": "chunk-1"}]
+
+    store._read = read
+    assert asyncio.run(store.search_from_entities("재무팀 담당자", 10)) == ["chunk-1"]
+    assert driver.calls[1][1] == {"entity_ids": ["e1"], "predicates": ["RESPONSIBLE_FOR"], "limit": 10}
+    assert driver.calls[2][1] == {"entity_ids": ["e1"], "limit": 10}
+
+
+def test_follow_references_is_directed_and_uses_parameters():
+    driver = FakeDriver()
+    store = Neo4jGraphStore(driver)
+
+    async def read(statement, parameters):
+        driver.calls.append((statement, parameters))
+        return [{"document_id": "b"}]
+
+    store._read = read
+    assert asyncio.run(store.follow_references(["a"])) == ["b"]
+    assert asyncio.run(store.follow_references([])) == ["b"][:0]
+    assert driver.calls == [(neo4j_store.FOLLOW_REFERENCES_CYPHER, {"documents": ["a"]})]
+    assert "-[:REFERENCES]->" in neo4j_store.FOLLOW_REFERENCES_CYPHER
 

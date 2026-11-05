@@ -24,12 +24,16 @@ class FakeStore:
         self.fulltext_error = fulltext_error
         self.calls = []
         self.filter_calls = []
+        self.document_calls = []
+        self.expansion_calls = []
         self.fulltext_calls = []
 
     async def search(self, query_or_embedding, limit, *scope):
         self.calls.append((query_or_embedding, limit, *scope))
         if self.error:
             raise self.error
+        if isinstance(query_or_embedding, str):
+            return [item["id"] if isinstance(item, dict) else item for item in self.result]
         return self.result
 
     async def fulltext(self, query, limit, scope, filters=None):
@@ -38,11 +42,51 @@ class FakeStore:
             raise self.fulltext_error
         return self.fulltext_result
 
+    async def seed_documents(self, query):
+        self.calls.append((query, service.GRAPH_CANDIDATE_LIMIT))
+        if self.error:
+            raise self.error
+        return ["doc"] if self.result else []
+
+    async def search_from_entities(self, query, limit):
+        return getattr(self, "entity_chunks", [])
+
+    async def follow_references(self, document_ids):
+        self.followed = getattr(self, "followed", []) + [list(document_ids)]
+        links = getattr(self, "links", {})
+        return sorted({target for document_id in document_ids for target in links.get(document_id, [])})
+
+    async def document_chunks(self, document_ids):
+        return [f"{document_id}-chunk" for document_id in document_ids]
+
+    async def search_from_documents(self, document_ids, limit):
+        self.expansion_calls.append((document_ids, limit))
+        return [item["id"] if isinstance(item, dict) else item for item in self.result[:limit]]
+
+    async def list_document_catalog(self):
+        return []
+
+    async def accessible_document_ids(self, document_ids, scope, filters=None):
+        self.document_calls.append((document_ids, scope, filters))
+        if scope is None or self.accessible == set():
+            return set()
+        return set(document_ids)
+
     async def filter_accessible(self, chunk_ids, scope, filters=None):
         self.filter_calls.append((chunk_ids, scope, filters))
         if self.filter_error:
             raise self.filter_error
         return set(chunk_ids) if self.accessible is None else self.accessible
+
+    async def fetch_accessible(self, chunk_ids, scope, filters=None, embedding=None):
+        self.filter_calls.append((chunk_ids, scope, filters))
+        if self.filter_error:
+            raise self.filter_error
+        if scope is None:
+            return []
+        allowed = set(chunk_ids) if self.accessible is None else self.accessible
+        rows = {item["id"]: item for item in [*self.result, *self.fulltext_result] if isinstance(item, dict)}
+        return [rows.get(chunk_id, chunk(chunk_id)) for chunk_id in chunk_ids if chunk_id in allowed]
 
 
 @pytest.fixture
@@ -71,7 +115,13 @@ def test_stores_run_in_parallel(stores):
         event = None
         order = []
 
-        async def search(self, value, limit, *scope):
+        async def seed_documents(self, value):
+            Waiting.order.append("start")
+            await asyncio.sleep(0)
+            Waiting.order.append("end")
+            return []
+
+        async def search(self, query_or_embedding, limit, *scope):
             Waiting.order.append("start")
             await asyncio.sleep(0)
             Waiting.order.append("end")
@@ -207,7 +257,7 @@ class TestRealStoreSelection:
         monkeypatch.setattr(service, "embed_query", embed)
         result = asyncio.run(service.search("질문"))
         assert result == {"chunks": [chunk("a")], "failed_sources": []}
-        assert vector.filter_calls == [([], SCOPE_FROM_ENV, None)]
+        assert vector.document_calls == [] and vector.filter_calls == []
 
     def test_close_stores_closes_both(self, monkeypatch, neo4j):
         closed = []
@@ -286,6 +336,14 @@ class TestGraphPermissionFilter:
         stores(FakeStore([chunk("a")], filter_error=RuntimeError("db")), FakeStore([chunk("secret")]))
         result = asyncio.run(service.search("질문"))
         assert result == {"chunks": [chunk("a")], "failed_sources": ["graph"]}
+
+    def test_inaccessible_seed_is_rejected_before_graph_expansion(self, stores):
+        vector, graph = FakeStore(accessible=set()), FakeStore([chunk("secret")])
+        stores(vector, graph)
+        result = asyncio.run(service.search("질문"))
+        assert graph.expansion_calls == []
+        assert result["chunks"] == []
+        assert vector.document_calls == [(["doc"], SCOPE, None)]
 
     def test_postgres_down_exposes_nothing(self, stores):
         down = RuntimeError("db")
@@ -393,4 +451,127 @@ def test_app_shutdown_closes_stores(monkeypatch):
     with TestClient(main.create_app()):
         assert closed == []
     assert closed == [True]
+
+
+class TestEntityChunks:
+    def test_entity_chunks_are_fetched_without_document_seed(self, stores):
+        vector = FakeStore([])
+        graph = FakeStore([])
+        graph.entity_chunks = ["chunk-a"]
+        vector.result = []
+        stores(vector, graph)
+        asyncio.run(service.search("재무팀 담당", None, SCOPE))
+        assert vector.filter_calls[-1][0] == ["chunk-a"] and vector.document_calls == []
+
+
+class TestGraphSearchSwitch:
+    @pytest.fixture
+    def neo4j(self, stores, monkeypatch):
+        vector = FakeStore([])
+        graph = FakeStore([chunk("g")])
+        stores(vector, graph)
+        monkeypatch.setattr(service, "Neo4jGraphStore", FakeStore)
+        return graph
+
+    def test_neo4j_is_searched_by_default(self, neo4j):
+        asyncio.run(service.search("질문", None, SCOPE))
+        assert len(neo4j.calls) == 1
+
+    def test_neo4j_can_be_turned_off(self, neo4j, monkeypatch):
+        monkeypatch.setenv("GRAPH_SEARCH_ENABLED", "false")
+        asyncio.run(service.search("질문", None, SCOPE))
+        assert neo4j.calls == []
+
+
+class TestChainSearch:
+    @pytest.fixture
+    def chain(self, stores, monkeypatch):
+        vector = FakeStore([{**chunk(f"v{i}"), "document_id": f"d{i}"} for i in range(5)])
+        graph = FakeStore([])
+        vector.fetch_chain = {}
+
+        async def nearest(chunk_ids, scope, filters, embedding, limit):
+            vector.nearest_calls.append((chunk_ids, limit))
+            nearest_first = sorted(chunk_ids, reverse=True)[:limit]
+            return [{**chunk(chunk_id), "document_id": chunk_id.removesuffix("-chunk")} for chunk_id in nearest_first]
+
+        vector.nearest_calls = []
+        vector.nearest_accessible = nearest
+        monkeypatch.setattr(service, "Neo4jGraphStore", FakeStore)
+        stores(vector, graph)
+        return vector, graph
+
+    def ids(self, query="질문"):
+        return [item["id"] for item in asyncio.run(service.search(query, None, SCOPE))["chunks"]]
+
+    def test_follows_two_hops_and_keeps_context_limit(self, chain):
+        _, graph = chain
+        graph.links = {"d0": ["x1"], "x1": ["x2"], "x2": ["x3"]}
+        result = self.ids()
+        assert result == [*[f"v{i}" for i in range(5)], "x2-chunk", "x1-chunk"]
+
+    def test_keeps_only_nearest_chunks(self, chain):
+        vector, graph = chain
+        graph.links = {"d0": ["x1", "x2", "x3"]}
+        result = self.ids()
+        assert result[-2:] == ["x3-chunk", "x2-chunk"]
+        assert vector.nearest_calls == [(["x1-chunk", "x2-chunk", "x3-chunk"], service.CHAIN_CONTEXT_LIMIT)]
+
+    def test_does_not_pass_through_inaccessible_document(self, chain):
+        vector, graph = chain
+        graph.links = {"d0": ["secret"], "secret": ["after"]}
+        vector.accessible = {"d0", "d1", "d2"}
+
+        async def allowed(document_ids, scope, filters=None):
+            return {document_id for document_id in document_ids if document_id != "secret"}
+
+        vector.accessible_document_ids = allowed
+        result = self.ids()
+        assert "secret-chunk" not in result and "after-chunk" not in result
+        assert len(graph.followed) == 1
+
+    def test_seeds_are_limited(self, chain):
+        _, graph = chain
+        self.ids()
+        assert graph.followed[0] == ["d0", "d1", "d2"]
+
+    def test_no_references_keeps_results(self, chain):
+        assert self.ids() == [f"v{i}" for i in range(5)]
+
+    def test_failure_is_reported_and_keeps_results(self, chain):
+        _, graph = chain
+
+        async def fail(document_ids):
+            raise RuntimeError("bolt")
+
+        graph.follow_references = fail
+        result = asyncio.run(service.search("질문", None, SCOPE))
+        assert [item["id"] for item in result["chunks"]] == [f"v{i}" for i in range(5)]
+        assert result["failed_sources"] == ["chain"]
+
+    def test_embedding_failure_still_follows_references(self, chain, monkeypatch):
+        vector, graph = chain
+        graph.links = {"d0": ["x1"]}
+
+        async def fail(query):
+            raise RuntimeError("embedding down")
+
+        async def fetch(chunk_ids, scope, filters=None, embedding=None):
+            return [{**chunk(chunk_id), "document_id": chunk_id.removesuffix("-chunk")} for chunk_id in chunk_ids]
+
+        async def fulltext(query, limit, scope, filters=None):
+            return [{**chunk("v0"), "document_id": "d0"}]
+
+        monkeypatch.setattr(service, "embed_query", fail)
+        vector.fetch_accessible = fetch
+        vector.fulltext = fulltext
+        result = asyncio.run(service.search("질문", None, SCOPE))
+        assert [item["id"] for item in result["chunks"]] == ["v0", "x1-chunk"]
+        assert result["failed_sources"] == ["vector"] and vector.nearest_calls == []
+
+    def test_disabled_does_not_follow(self, chain, monkeypatch):
+        _, graph = chain
+        monkeypatch.setenv("GRAPH_SEARCH_ENABLED", "false")
+        self.ids()
+        assert not hasattr(graph, "followed")
 

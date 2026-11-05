@@ -64,6 +64,21 @@ def neo4j_password() -> str | None:
     return os.getenv("NEO4J_PASSWORD") or None
 
 
+def entity_extraction_enabled() -> bool:
+    """켜면 적재할 때 청크마다 본문을 LLM으로 보낸다. 외부 전송 범위를 정한 뒤에만 켠다."""
+    return os.getenv("ENTITY_EXTRACTION_ENABLED", "").strip().lower() == "true"
+
+
+def graph_search_enabled() -> bool:
+    """Neo4j를 연결하면 질문 검색에도 쓴다. 장애나 측정 때 false로 끌 수 있다."""
+    return os.getenv("GRAPH_SEARCH_ENABLED", "").strip().lower() != "false"
+
+
+def document_topics_enabled() -> bool:
+    """켜면 적재할 때 문서마다 앞부분을 LLM으로 보내 주제를 만든다."""
+    return os.getenv("DOCUMENT_TOPICS_ENABLED", "").strip().lower() == "true"
+
+
 def neo4j_database() -> str | None:
     return os.getenv("NEO4J_DATABASE") or None
 

@@ -67,10 +67,17 @@ class TestSampleGraphStore:
         ],
     )
     def test_entity_match(self, query, expected):
-        assert [c["id"] for c in asyncio.run(stores.SampleGraphStore().search(query, 10))] == expected
+        assert asyncio.run(stores.SampleGraphStore().search(query, 10)) == expected
 
     def test_limit(self):
         assert len(asyncio.run(stores.SampleGraphStore().search("재택근무 규정", 1))) == 1
+
+    def test_graph_results_are_ids_and_body_is_loaded_from_vector_store(self):
+        vector = stores.SampleVectorStore()
+        ids = asyncio.run(stores.SampleGraphStore().search("결제 서비스", 10))
+        chunks = asyncio.run(vector.fetch_accessible(ids, SCOPE))
+        assert [item["id"] for item in chunks] == ids
+        assert all(item["text"] for item in chunks)
 
 
 FULL_A = {
@@ -228,6 +235,75 @@ class TestPostgresVectorStore:
         sql, params = data_statements(connection)[0]
         assert "FROM accessible_chunks(" in sql and "ANY(%s::uuid[])" in sql
         assert params == (*SCOPE, ["pdf"], None, None, None, None, ["a", "b"])
+
+    def test_fetch_accessible_reads_body_through_permission_function_in_graph_order(self, connect):
+        rows = [chunk("b"), chunk("a")]
+        connection = FakeConnection(rows=rows)
+        connect(connection)
+        filters = SearchFilters(extensions=["pdf"])
+        result = asyncio.run(stores.PostgresVectorStore("x").fetch_accessible(["b", "a"], SCOPE, filters))
+        assert result == rows
+        sql, params = data_statements(connection)[0]
+        assert "unnest(%s::uuid[]) WITH ORDINALITY" in sql
+        assert "JOIN accessible_chunks(" in sql
+        assert "ORDER BY r.ordinality" in sql
+        assert params == (["b", "a"], *SCOPE, ["pdf"], None, None, None, None)
+
+    def test_graph_seed_document_access_is_checked_in_postgres_with_filters(self, connect):
+        connection = FakeConnection(rows=[{"id": "doc-a"}])
+        connect(connection)
+        filters = SearchFilters(document_types=["POLICY"])
+        result = asyncio.run(
+            stores.PostgresVectorStore("x").accessible_document_ids(["doc-a", "doc-b"], SCOPE, filters)
+        )
+        assert result == {"doc-a"}
+        sql, params = data_statements(connection)[0]
+        assert "FROM accessible_chunks(" in sql
+        assert "dv.document_id = ANY(%s::uuid[])" in sql
+        assert params == (*SCOPE, None, ["POLICY"], None, None, None, ["doc-a", "doc-b"])
+
+    def test_graph_chunks_use_existing_cosine_distance_cutoff(self, connect):
+        connection = FakeConnection(rows=[chunk("a")])
+        connect(connection)
+        filters = SearchFilters(extensions=["pdf"])
+        result = asyncio.run(
+            stores.PostgresVectorStore("x").fetch_accessible(["a", "b"], SCOPE, filters, [0.25, 0.75])
+        )
+        assert result == [chunk("a")]
+        sql, params = data_statements(connection)[0]
+        assert "c.embedding IS NOT NULL" in sql
+        assert "c.embedding <=> %s::vector <= %s" in sql
+        assert params == (
+            ["a", "b"], *SCOPE, ["pdf"], None, None, None, None,
+            "[0.25,0.75]", stores.config.DEFAULT_VECTOR_MAX_COSINE_DISTANCE,
+        )
+
+    @pytest.mark.parametrize("ids, scope", [(["a"], None), ([], SCOPE)])
+    def test_fetch_accessible_without_ids_or_scope_does_not_connect(self, ids, scope):
+        assert asyncio.run(stores.PostgresVectorStore("x").fetch_accessible(ids, scope)) == []
+
+    def test_replace_document_topics_calls_server_function(self, connect):
+        connection = FakeConnection()
+        connect(connection)
+        asyncio.run(stores.PostgresVectorStore("x").replace_document_topics("v1", ["연차", "인사"]))
+        assert (stores.REPLACE_TOPICS_SQL, ("v1", ["연차", "인사"])) in connection.executed
+        assert "replace_document_topics(%s::uuid, %s::text[])" in stores.REPLACE_TOPICS_SQL
+
+    def test_replace_document_topics_failure_propagates(self, connect):
+        connection = FakeConnection(fail_on="SELECT replace_document_topics")
+        connect(connection)
+        with pytest.raises(RuntimeError):
+            asyncio.run(stores.PostgresVectorStore("x").replace_document_topics("v1", ["연차"]))
+        assert connection.exit_error is RuntimeError
+
+    def test_nearest_accessible_goes_through_permission_function(self, connect):
+        connection = FakeConnection(rows=[chunk("a")])
+        connect(connection)
+        result = asyncio.run(stores.PostgresVectorStore("x").nearest_accessible(["a"], SCOPE, None, [0.5], 2))
+        assert result == [chunk("a")]
+        sql, params = data_statements(connection)[0]
+        assert "FROM accessible_chunks(" in sql and "ORDER BY c.embedding <=>" in sql
+        assert params == (*SCOPE, None, None, None, None, None, ["a"], "[0.5]", 2)
 
     def test_no_scope_returns_nothing_without_connecting(self):
         assert asyncio.run(stores.PostgresVectorStore("x").search([1.0], 1, None)) == []

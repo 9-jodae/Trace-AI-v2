@@ -29,6 +29,10 @@ FULLTEXT_FALLBACK_BELOW = 5
 # 권한 필터로 줄어들어도 SOURCE_LIMIT을 채울 수 있도록 그래프 후보를 더 가져온다
 GRAPH_CANDIDATE_LIMIT = 50
 CONTEXT_LIMIT = 5
+# 연쇄 참조를 따라갈 시작 문서 수, 단계 수, 답변 근거에 넣을 청크 수
+CHAIN_SEED_DOCUMENTS = 3
+CHAIN_MAX_HOPS = 2
+CHAIN_CONTEXT_LIMIT = 2
 
 
 class SearchResult(TypedDict):
@@ -73,6 +77,36 @@ async def close_stores() -> None:
     _real_stores.cache_clear()
 
 
+async def _follow_chain(
+    vector_store: VectorStore,
+    graph_store: GraphStore,
+    chunks: list[Chunk],
+    scope: AccessScope | None,
+    filters: SearchFilters | None,
+    embedding: list[float] | None,
+) -> list[Chunk]:
+    """검색된 문서가 가리키는 문서를 단계별로 따라간다. 볼 수 없는 문서는 지나가지 않는다."""
+    seeds = [chunk["document_id"] for chunk in chunks if chunk.get("document_id")]
+    frontier = list(dict.fromkeys(seeds))[:CHAIN_SEED_DOCUMENTS]
+    visited = set(frontier)
+    reached: list[str] = []
+    for _ in range(CHAIN_MAX_HOPS):
+        targets = [target for target in await graph_store.follow_references(frontier) if target not in visited]
+        visited.update(targets)
+        allowed = await vector_store.accessible_document_ids(targets, scope, filters) if targets else set()
+        frontier = [target for target in targets if target in allowed]
+        if not frontier:
+            break
+        reached.extend(frontier)
+    present = {chunk["id"] for chunk in chunks}
+    chunk_ids = [chunk_id for chunk_id in await graph_store.document_chunks(reached) if chunk_id not in present]
+    if embedding is None:
+        # 질문 임베딩이 실패해도 전문 검색으로 찾은 문서의 참조는 쓸 수 있다. 이때는 가까운 순서를 모른다
+        return (await vector_store.fetch_accessible(chunk_ids, scope, filters))[:CHAIN_CONTEXT_LIMIT]
+    # 질문과 표현이 다른 문서를 찾는 경로라 거리로 잘라내지 않고, 가까운 순서로 몇 개만 고른다
+    return await vector_store.nearest_accessible(chunk_ids, scope, filters, embedding, CHAIN_CONTEXT_LIMIT)
+
+
 async def filter_accessible_context(chunks: list[Chunk], scope: AccessScope | None = None) -> list[Chunk]:
     # 이전 근거를 재사용하기 전에 권한 변경, 문서 삭제, 개정을 다시 확인한다
     vector_store, _ = get_stores()
@@ -91,15 +125,38 @@ async def search(
         # 권한 범위를 모르면 어떤 문서도 근거로 내보내지 않는다. 임베딩 비용도 쓰지 않는다
         logger.warning("Search skipped: no access scope")
         return {"chunks": [], "failed_sources": []}
+    # 하나의 질문 벡터를 벡터 검색과 그래프 후보 관련도 검증에 공유한다.
+    query_embedding = asyncio.create_task(embed_query(query))
 
     async def search_vector() -> list[Chunk]:
-        return await vector_store.search(await embed_query(query), SOURCE_LIMIT, scope, filters)
+        return await vector_store.search(await query_embedding, SOURCE_LIMIT, scope, filters)
 
     async def search_graph() -> list[Chunk]:
-        # 권한을 확인하지 못하면 그래프 결과도 내보내지 않도록 실패로 처리한다
-        candidates = await graph_store.search(query, GRAPH_CANDIDATE_LIMIT)
-        accessible = await vector_store.filter_accessible([chunk["id"] for chunk in candidates], scope, filters)
-        return [chunk for chunk in candidates if chunk["id"] in accessible][:SOURCE_LIMIT]
+        if isinstance(graph_store, Neo4jGraphStore) and not config.graph_search_enabled():
+            return []
+        # Neo4j 제목 매칭 결과를 먼저 PostgreSQL에서 허용된 현재 문서인지 확인한 뒤에만 관계를 확장한다.
+        seed_ids = await graph_store.seed_documents(query)
+        # 엔티티 경로는 청크 ID를 돌려주므로 문서 시작점에 섞지 않고 후보에 바로 넣는다
+        entity_chunk_ids = await graph_store.search_from_entities(query, GRAPH_CANDIDATE_LIMIT)
+        if not seed_ids and not entity_chunk_ids:
+            return []
+        allowed_seed_ids = await vector_store.accessible_document_ids(seed_ids, scope, filters) if seed_ids else []
+        reference_ids = []
+        if allowed_seed_ids:
+            reference_ids = await graph_store.search_from_documents(
+                [document_id for document_id in seed_ids if document_id in allowed_seed_ids], GRAPH_CANDIDATE_LIMIT
+            )
+        candidate_ids = list(dict.fromkeys([*entity_chunk_ids, *reference_ids]))
+        if not candidate_ids:
+            return []
+        try:
+            embedding = await query_embedding
+        except Exception:
+            # 질문 임베딩 장애에도 명시적 문서 관계 검색은 계속 제공한다.
+            embedding = None
+        return await vector_store.fetch_accessible(
+            candidate_ids[:GRAPH_CANDIDATE_LIMIT], scope, filters, embedding
+        )
 
     names = ["vector", "graph"]
     results = await asyncio.gather(search_vector(), search_graph(), return_exceptions=True)
@@ -122,4 +179,15 @@ async def search(
             failed.append("fulltext")
     if not rankings:
         raise AiUnavailableError("벡터, 그래프, 전문 검색이 모두 실패했습니다.")
-    return {"chunks": rrf_fuse(rankings, CONTEXT_LIMIT), "failed_sources": failed}
+    chunks = rrf_fuse(rankings, CONTEXT_LIMIT)
+    if chunks and isinstance(graph_store, Neo4jGraphStore) and config.graph_search_enabled():
+        try:
+            embedding = None if query_embedding.exception() else query_embedding.result()
+            chain = await _follow_chain(vector_store, graph_store, chunks, scope, filters, embedding)
+        except Exception as exc:
+            logger.error("chain search failed: %s", describe_exception(exc))
+            failed.append("chain")
+        else:
+            # 기존 결과를 밀어내지 않도록 뒤에 더한다
+            chunks = [*chunks, *chain]
+    return {"chunks": chunks, "failed_sources": failed}
