@@ -61,6 +61,21 @@ RETURN id
 ORDER BY priority, document_id, id
 LIMIT $limit
 """
+FOLLOW_REFERENCES_CYPHER = """
+UNWIND $documents AS document_id
+MATCH (:Document {document_id: document_id})-[:REFERENCES]->(target:Document)
+RETURN DISTINCT target.document_id AS document_id
+ORDER BY document_id
+"""
+DOCUMENT_CHUNKS_CYPHER = """
+UNWIND $documents AS document_id
+MATCH (:Document {document_id: document_id})-[:HAS_CHUNK]->(c:Chunk)
+WITH document_id, c
+ORDER BY c.chunk_index, c.id
+WITH document_id, collect(c.id)[0..$per_document_limit] AS ids
+UNWIND ids AS id
+RETURN id
+"""
 MERGE_DOCUMENT_CYPHER = """
 MERGE (d:Document {document_id: $document_id})
 SET d.source = $source, d.names = $names
@@ -177,6 +192,21 @@ class Neo4jGraphStore:
         rows = await self._read(
             REFERENCE_SEARCH_CYPHER,
             {"documents": document_ids, "limit": limit, "per_document_limit": CHUNKS_PER_DOCUMENT_LIMIT},
+        )
+        return [row["id"] for row in rows]
+
+    async def follow_references(self, document_ids: list[str]) -> list[str]:
+        """문서가 본문에서 가리키는 문서를 찾는다. 권한은 호출자가 단계마다 확인한다."""
+        if not document_ids:
+            return []
+        rows = await self._read(FOLLOW_REFERENCES_CYPHER, {"documents": document_ids})
+        return [row["document_id"] for row in rows]
+
+    async def document_chunks(self, document_ids: list[str]) -> list[str]:
+        if not document_ids:
+            return []
+        rows = await self._read(
+            DOCUMENT_CHUNKS_CYPHER, {"documents": document_ids, "per_document_limit": CHUNKS_PER_DOCUMENT_LIMIT}
         )
         return [row["id"] for row in rows]
 

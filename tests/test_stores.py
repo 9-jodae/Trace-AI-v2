@@ -296,6 +296,15 @@ class TestPostgresVectorStore:
             asyncio.run(stores.PostgresVectorStore("x").replace_document_topics("v1", ["연차"]))
         assert connection.exit_error is RuntimeError
 
+    def test_nearest_accessible_goes_through_permission_function(self, connect):
+        connection = FakeConnection(rows=[chunk("a")])
+        connect(connection)
+        result = asyncio.run(stores.PostgresVectorStore("x").nearest_accessible(["a"], SCOPE, None, [0.5], 2))
+        assert result == [chunk("a")]
+        sql, params = data_statements(connection)[0]
+        assert "FROM accessible_chunks(" in sql and "ORDER BY c.embedding <=>" in sql
+        assert params == (*SCOPE, None, None, None, None, None, ["a"], "[0.5]", 2)
+
     def test_no_scope_returns_nothing_without_connecting(self):
         assert asyncio.run(stores.PostgresVectorStore("x").search([1.0], 1, None)) == []
 

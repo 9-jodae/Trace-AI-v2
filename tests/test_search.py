@@ -51,6 +51,14 @@ class FakeStore:
     async def search_from_entities(self, query, limit):
         return getattr(self, "entity_chunks", [])
 
+    async def follow_references(self, document_ids):
+        self.followed = getattr(self, "followed", []) + [list(document_ids)]
+        links = getattr(self, "links", {})
+        return sorted({target for document_id in document_ids for target in links.get(document_id, [])})
+
+    async def document_chunks(self, document_ids):
+        return [f"{document_id}-chunk" for document_id in document_ids]
+
     async def search_from_documents(self, document_ids, limit):
         self.expansion_calls.append((document_ids, limit))
         return [item["id"] if isinstance(item, dict) else item for item in self.result[:limit]]
@@ -465,12 +473,85 @@ class TestGraphSearchSwitch:
         monkeypatch.setattr(service, "Neo4jGraphStore", FakeStore)
         return graph
 
-    def test_neo4j_is_not_searched_by_default(self, neo4j):
+    def test_neo4j_is_searched_by_default(self, neo4j):
+        asyncio.run(service.search("질문", None, SCOPE))
+        assert len(neo4j.calls) == 1
+
+    def test_neo4j_can_be_turned_off(self, neo4j, monkeypatch):
+        monkeypatch.setenv("GRAPH_SEARCH_ENABLED", "false")
         asyncio.run(service.search("질문", None, SCOPE))
         assert neo4j.calls == []
 
-    def test_neo4j_is_searched_when_enabled(self, neo4j, monkeypatch):
-        monkeypatch.setenv("GRAPH_SEARCH_ENABLED", "true")
-        asyncio.run(service.search("질문", None, SCOPE))
-        assert len(neo4j.calls) == 1
+
+class TestChainSearch:
+    @pytest.fixture
+    def chain(self, stores, monkeypatch):
+        vector = FakeStore([{**chunk(f"v{i}"), "document_id": f"d{i}"} for i in range(5)])
+        graph = FakeStore([])
+        vector.fetch_chain = {}
+
+        async def nearest(chunk_ids, scope, filters, embedding, limit):
+            vector.nearest_calls.append((chunk_ids, limit))
+            nearest_first = sorted(chunk_ids, reverse=True)[:limit]
+            return [{**chunk(chunk_id), "document_id": chunk_id.removesuffix("-chunk")} for chunk_id in nearest_first]
+
+        vector.nearest_calls = []
+        vector.nearest_accessible = nearest
+        monkeypatch.setattr(service, "Neo4jGraphStore", FakeStore)
+        stores(vector, graph)
+        return vector, graph
+
+    def ids(self, query="질문"):
+        return [item["id"] for item in asyncio.run(service.search(query, None, SCOPE))["chunks"]]
+
+    def test_follows_two_hops_and_keeps_context_limit(self, chain):
+        _, graph = chain
+        graph.links = {"d0": ["x1"], "x1": ["x2"], "x2": ["x3"]}
+        result = self.ids()
+        assert result == [*[f"v{i}" for i in range(5)], "x2-chunk", "x1-chunk"]
+
+    def test_keeps_only_nearest_chunks(self, chain):
+        vector, graph = chain
+        graph.links = {"d0": ["x1", "x2", "x3"]}
+        result = self.ids()
+        assert result[-2:] == ["x3-chunk", "x2-chunk"]
+        assert vector.nearest_calls == [(["x1-chunk", "x2-chunk", "x3-chunk"], service.CHAIN_CONTEXT_LIMIT)]
+
+    def test_does_not_pass_through_inaccessible_document(self, chain):
+        vector, graph = chain
+        graph.links = {"d0": ["secret"], "secret": ["after"]}
+        vector.accessible = {"d0", "d1", "d2"}
+
+        async def allowed(document_ids, scope, filters=None):
+            return {document_id for document_id in document_ids if document_id != "secret"}
+
+        vector.accessible_document_ids = allowed
+        result = self.ids()
+        assert "secret-chunk" not in result and "after-chunk" not in result
+        assert len(graph.followed) == 1
+
+    def test_seeds_are_limited(self, chain):
+        _, graph = chain
+        self.ids()
+        assert graph.followed[0] == ["d0", "d1", "d2"]
+
+    def test_no_references_keeps_results(self, chain):
+        assert self.ids() == [f"v{i}" for i in range(5)]
+
+    def test_failure_is_reported_and_keeps_results(self, chain):
+        _, graph = chain
+
+        async def fail(document_ids):
+            raise RuntimeError("bolt")
+
+        graph.follow_references = fail
+        result = asyncio.run(service.search("질문", None, SCOPE))
+        assert [item["id"] for item in result["chunks"]] == [f"v{i}" for i in range(5)]
+        assert result["failed_sources"] == ["chain"]
+
+    def test_disabled_does_not_follow(self, chain, monkeypatch):
+        _, graph = chain
+        monkeypatch.setenv("GRAPH_SEARCH_ENABLED", "false")
+        self.ids()
+        assert not hasattr(graph, "followed")
 

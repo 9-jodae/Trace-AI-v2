@@ -187,3 +187,18 @@ def test_search_from_entities_runs_with_query_parameters():
     assert driver.calls[1][1] == {"entity_ids": ["e1"], "predicates": ["RESPONSIBLE_FOR"], "limit": 10}
     assert driver.calls[2][1] == {"entity_ids": ["e1"], "limit": 10}
 
+
+def test_follow_references_is_directed_and_uses_parameters():
+    driver = FakeDriver()
+    store = Neo4jGraphStore(driver)
+
+    async def read(statement, parameters):
+        driver.calls.append((statement, parameters))
+        return [{"document_id": "b"}]
+
+    store._read = read
+    assert asyncio.run(store.follow_references(["a"])) == ["b"]
+    assert asyncio.run(store.follow_references([])) == ["b"][:0]
+    assert driver.calls == [(neo4j_store.FOLLOW_REFERENCES_CYPHER, {"documents": ["a"]})]
+    assert "-[:REFERENCES]->" in neo4j_store.FOLLOW_REFERENCES_CYPHER
+
