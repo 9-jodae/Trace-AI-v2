@@ -49,6 +49,12 @@ class EvidenceQuote(CamelModel):
     char_end: int | None = None
 
 
+class KeywordItem(CamelModel):
+    # TODO: 형식은 서버 계약에서 확정 (docs199-Server#78)
+    chunk_id: str
+    text: str
+
+
 class ChatResponse(CamelModel):
     thread_id: str
     answer: str
@@ -58,5 +64,6 @@ class ChatResponse(CamelModel):
     context_probability: float | None
     sources: list[SourceChunk]
     evidence: list[EvidenceQuote]
+    keywords: list[KeywordItem]
     failed_sources: list[str]
     fallback_reason: str | None

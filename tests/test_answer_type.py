@@ -35,3 +35,17 @@ class TestAnswerType:
         ask("기간은?")
         body = ask("글쎄").json()
         assert body["answerType"] == "NO_EVIDENCE" and body["answer"] == graph.NO_EVIDENCE_ANSWER
+
+
+class TestKeywordsInResponse:
+    def test_answer_returns_keywords(self, ask, ai, monkeypatch):
+        async def generate(question, context, history):
+            return '{"answer": "답", "keywords": [{"chunk": 1, "text": "내용"}]}'
+
+        monkeypatch.setattr(graph, "generate_answer", generate)
+        assert ask("q").json()["keywords"] == [{"chunkId": "a", "text": "내용"}]
+
+    def test_reply_without_documents_has_empty_keywords(self, ask, ai):
+        ai.search_result = {"chunks": [], "failed_sources": []}
+        assert ask("q").json()["keywords"] == []
+

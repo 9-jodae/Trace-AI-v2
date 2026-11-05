@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 MAX_EVIDENCE = 3
 MIN_CLARIFICATION_OPTIONS = 2
+MAX_KEYWORDS = 3
+MAX_KEYWORD_LENGTH = 50
 ANSWER_OBJECT_PATTERN = re.compile(r'\{\s*"answer"\s*:')
 JSON_START_PATTERN = re.compile(r"\s*(```(?:json)?\s*)?\{")
 
@@ -21,6 +23,11 @@ JSON_START_PATTERN = re.compile(r"\s*(```(?:json)?\s*)?\{")
 class EvidenceCandidate(BaseModel):
     chunk: StrictInt
     quote: str
+
+
+class KeywordCandidate(BaseModel):
+    chunk: StrictInt
+    text: str
 
 
 class OptionCandidate(BaseModel):
@@ -31,7 +38,13 @@ class OptionCandidate(BaseModel):
 class AnswerCandidate(BaseModel):
     answer: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
     evidence: Any = None
+    keywords: Any = None
     options: Any = None
+
+
+class Keyword(TypedDict):
+    chunk_id: str
+    text: str
 
 
 class Evidence(TypedDict):
@@ -88,10 +101,30 @@ def _valid_candidates(raw: Any) -> list[EvidenceCandidate]:
     return candidates
 
 
+def ground_keywords(raw: Any, context: list[Chunk]) -> list[Keyword]:
+    # 인용과 같이 원문에 있는 문구만 내보낸다. 하나가 형식을 어겨도 나머지는 살린다
+    keywords: list[Keyword] = []
+    seen: set[str] = set()
+    for item in raw if isinstance(raw, list) else []:
+        try:
+            candidate = KeywordCandidate.model_validate(item)
+        except ValidationError:
+            continue
+        text = candidate.text.strip()
+        if not text or len(text) > MAX_KEYWORD_LENGTH or text in seen or not 1 <= candidate.chunk <= len(context):
+            continue
+        chunk = context[candidate.chunk - 1]
+        if text in chunk["text"]:
+            seen.add(text)
+            keywords.append({"chunk_id": chunk["id"], "text": text})
+    return keywords[:MAX_KEYWORDS]
+
+
 class ParsedAnswer(NamedTuple):
     answer: str
     evidence: list[Evidence]
     clarification: bool
+    keywords: list[Keyword]
 
 
 def _is_valid_clarification(raw: Any, context: list[Chunk]) -> bool:
@@ -130,11 +163,11 @@ def parse_answer(response: str, context: list[Chunk]) -> ParsedAnswer:
     if candidate is None:
         # 모델이 형식을 무시하고 글로 답하면 근거만 빼고 답변은 살린다. 응답 본문은 기록하지 않는다
         logger.warning("LLM answer is not in the expected format")
-        return ParsedAnswer(response, [], False)
+        return ParsedAnswer(response, [], False, [])
     evidence = ground_evidence(_valid_candidates(candidate.evidence), context)
     # 근거 없다고 답하면서 문의처 같은 추측을 덧붙이지 못하게 고정 문장으로 돌린다
     if NO_EVIDENCE_ANSWER in candidate.answer and not evidence:
-        return ParsedAnswer(NO_EVIDENCE_ANSWER, [], False)
+        return ParsedAnswer(NO_EVIDENCE_ANSWER, [], False, [])
     if _is_valid_clarification(candidate.options, context):
-        return ParsedAnswer(candidate.answer, [], True)
-    return ParsedAnswer(candidate.answer, evidence, False)
+        return ParsedAnswer(candidate.answer, [], True, [])
+    return ParsedAnswer(candidate.answer, evidence, False, ground_keywords(candidate.keywords, context))

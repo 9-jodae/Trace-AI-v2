@@ -12,6 +12,7 @@ RESPONSE_FIELDS = {
     "contextProbability",
     "sources",
     "evidence",
+    "keywords",
     "failedSources",
     "fallbackReason",
 }

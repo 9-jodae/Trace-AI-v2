@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from conftest import chunk
 
@@ -169,12 +171,60 @@ class TestParseAnswer:
     def test_clarification_clears_evidence(self):
         options = '[{"label": "가", "chunk": 1}, {"label": "나", "chunk": 2}]'
         response = '{"answer": "어느 쪽?", "evidence": [{"chunk": 2, "quote": "%s"}], "options": %s}' % (QUOTE, options)
-        assert parse_answer(response, CONTEXT) == ("어느 쪽?", [], True)
+        assert parse_answer(response, CONTEXT) == ("어느 쪽?", [], True, [])
 
     def test_refusal_wins_over_options(self):
         options = '[{"label": "가", "chunk": 1}, {"label": "나", "chunk": 2}]'
         response = '{"answer": "관련 문서를 찾지 못했습니다.", "options": %s}' % options
-        assert parse_answer(response, CONTEXT) == ("관련 문서를 찾지 못했습니다.", [], False)
+        assert parse_answer(response, CONTEXT) == ("관련 문서를 찾지 못했습니다.", [], False, [])
 
     def test_answer_whitespace_is_trimmed(self):
         assert parse_answer('{"answer": "  답  "}', CONTEXT)[0] == "답"
+
+
+class TestKeywords:
+    CONTEXT = [
+        {"id": "a", "text": "미사용 연차는 최대 5일 이월한다.", "source": "문서"},
+        {"id": "b", "text": "숙박비 한도", "source": "문서"},
+    ]
+
+    def parse(self, keywords):
+        return parse_answer(json.dumps({"answer": "답", "evidence": [], "keywords": keywords}), self.CONTEXT)
+
+    def test_keeps_only_text_found_in_chunk(self):
+        keywords = [
+            {"chunk": 1, "text": "최대 5일"},
+            {"chunk": 2, "text": "최대 5일"},
+            {"chunk": 2, "text": "지어낸 말"},
+        ]
+        result = self.parse(keywords)
+        assert result.keywords == [{"chunk_id": "a", "text": "최대 5일"}]
+
+    def test_limits_to_three_and_removes_duplicates(self):
+        words = ["미사용", "연차", "연차", "최대", "이월"]
+        result = self.parse([{"chunk": 1, "text": word} for word in words])
+        assert [item["text"] for item in result.keywords] == ["미사용", "연차", "최대"]
+
+    @pytest.mark.parametrize(
+        "bad",
+        [None, "연차", [{"chunk": "1", "text": "연차"}], [{"chunk": 9, "text": "연차"}], [{"chunk": 1, "text": " "}]],
+    )
+    def test_invalid_values_are_ignored(self, bad):
+        assert self.parse(bad).keywords == []
+
+    def test_long_text_is_ignored(self):
+        long_text = "가" * 51
+        context = [{"id": "a", "text": long_text, "source": "문서"}]
+        response = json.dumps({"answer": "답", "keywords": [{"chunk": 1, "text": long_text}]})
+        assert parse_answer(response, context).keywords == []
+
+    def test_clarification_has_no_keywords(self):
+        response = json.dumps(
+            {
+                "answer": "어느 쪽인가요?",
+                "keywords": [{"chunk": 1, "text": "연차"}],
+                "options": [{"label": "연차", "chunk": 1}, {"label": "숙박비", "chunk": 2}],
+            }
+        )
+        assert parse_answer(response, self.CONTEXT).keywords == []
+

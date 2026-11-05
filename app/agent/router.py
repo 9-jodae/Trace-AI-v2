@@ -48,6 +48,7 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
         context_probability=result["context_probability"],
         sources=result["context"],
         evidence=result["evidence"],
+        keywords=result["keywords"],
         failed_sources=result["failed_sources"],
         fallback_reason=result["fallback_reason"],
     )
