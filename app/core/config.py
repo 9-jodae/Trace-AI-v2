@@ -13,8 +13,9 @@ DEFAULT_MAX_CONVERSATIONS = 1000
 DEFAULT_CONVERSATION_TTL_SECONDS = 3600
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
 DEFAULT_DB_POOL_MAX_SIZE = 10
-# 시연 문서 18개와 질문 15개로 측정한 값. 관련 질문의 정답은 0.82 이하, 무관 질문은 대부분 0.85 이상이었다
-DEFAULT_VECTOR_MAX_COSINE_DISTANCE = 0.85
+# 문서 147개와 질문 9개로 다시 잰 값(2026-11-06). 0.85보다 기대 문서 적중은 같고 무관 질문의 결과는 줄었다.
+# 0.70은 기대 문서를 놓쳤다
+DEFAULT_VECTOR_MAX_COSINE_DISTANCE = 0.75
 
 
 def is_production() -> bool:
