@@ -4,6 +4,7 @@ import json
 import logging
 from pathlib import Path
 
+from app.core import config
 from app.retrieval.chunking import chunk_document
 from app.retrieval.embedding import embed_documents
 from app.retrieval.entity_extraction import extract_entity_graph
@@ -49,7 +50,7 @@ async def index_document(
     await graph_store.replace_document(
         document["document_id"], document["source"], document_names(document), chunks
     )
-    if isinstance(graph_store, Neo4jGraphStore):
+    if isinstance(graph_store, Neo4jGraphStore) and config.entity_extraction_enabled():
         mentions, assertions = await extract_entity_graph(
             document["document_id"], document["version_id"], chunks
         )

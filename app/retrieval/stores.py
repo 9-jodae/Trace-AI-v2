@@ -152,6 +152,8 @@ class GraphStore(Protocol):
 
     async def search_from_documents(self, document_ids: list[str], limit: int) -> list[str]: ...
 
+    async def search_from_entities(self, query: str, limit: int) -> list[str]: ...
+
     async def list_document_catalog(self) -> list[dict[str, str]]: ...
 
     async def replace_document(self, document_id: str, source: str, names: list[str], chunks: list[Chunk]) -> None: ...
@@ -318,6 +320,9 @@ class NoGraphStore:
     async def close(self) -> None:
         pass
 
+    async def search_from_entities(self, query: str, limit: int) -> list[str]:
+        return []
+
     async def seed_documents(self, query: str) -> list[str]:
         return []
 
@@ -389,6 +394,9 @@ class SampleVectorStore:
 
 
 class SampleGraphStore:
+    async def search_from_entities(self, query: str, limit: int) -> list[str]:
+        return []
+
     async def seed_documents(self, query: str) -> list[str]:
         normalized = "".join(query.split()).casefold()
         return [name for name in SAMPLE_ENTITIES if "".join(name.split()).casefold() in normalized]

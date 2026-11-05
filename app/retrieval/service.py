@@ -100,18 +100,19 @@ async def search(
     async def search_graph() -> list[Chunk]:
         # Neo4j 제목 매칭 결과를 먼저 PostgreSQL에서 허용된 현재 문서인지 확인한 뒤에만 관계를 확장한다.
         seed_ids = await graph_store.seed_documents(query)
-        entity_seed_ids = []
-        if isinstance(graph_store, Neo4jGraphStore):
-            entity_seed_ids = await graph_store.search_from_entities(query, GRAPH_CANDIDATE_LIMIT)
-        seed_ids = list(dict.fromkeys([*seed_ids, *entity_seed_ids]))
-        if not seed_ids:
+        # 엔티티 경로는 청크 ID를 돌려주므로 문서 시작점에 섞지 않고 후보에 바로 넣는다
+        entity_chunk_ids = await graph_store.search_from_entities(query, GRAPH_CANDIDATE_LIMIT)
+        if not seed_ids and not entity_chunk_ids:
             return []
-        allowed_seed_ids = await vector_store.accessible_document_ids(seed_ids, scope, filters)
-        if not allowed_seed_ids:
+        allowed_seed_ids = await vector_store.accessible_document_ids(seed_ids, scope, filters) if seed_ids else []
+        reference_ids = []
+        if allowed_seed_ids:
+            reference_ids = await graph_store.search_from_documents(
+                [document_id for document_id in seed_ids if document_id in allowed_seed_ids], GRAPH_CANDIDATE_LIMIT
+            )
+        candidate_ids = list(dict.fromkeys([*entity_chunk_ids, *reference_ids]))
+        if not candidate_ids:
             return []
-        candidate_ids = await graph_store.search_from_documents(
-            [document_id for document_id in seed_ids if document_id in allowed_seed_ids], GRAPH_CANDIDATE_LIMIT
-        )
         try:
             embedding = await query_embedding
         except Exception:

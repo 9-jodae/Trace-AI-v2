@@ -27,6 +27,7 @@ FAKE_ENV = {
     "NEO4J_USER": "",
     "NEO4J_PASSWORD": "",
     "NEO4J_DATABASE": "",
+    "ENTITY_EXTRACTION_ENABLED": "",
     "EMBEDDING_PROXY_URL": "",
     "BEDROCK_REGION": "",
     "ACCESS_DEPARTMENT_ID": "",
