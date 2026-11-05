@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JEV Playground</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --text: #1f2328; --muted: #68707a; --line: #d9dbde;
+  --accent: #1a6fd1; --accent-soft: #e4effb; --warn-bg: #fdf3dc; --warn-text: #7a5400;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17191c; --panel: #212429; --text: #e8eaed; --muted: #9aa2ac; --line: #3a3f46;
+    --accent: #6cb0f5; --accent-soft: #1f3550; --warn-bg: #3d3115; --warn-text: #f0d48a;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+main { max-width: 800px; margin: 0 auto; padding: 28px 16px 56px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 0 0 12px; }
+.sub { color: var(--muted); margin: 0 0 20px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-top: 14px; }
+form { display: flex; gap: 8px; }
+input { flex: 1; min-width: 0; padding: 10px 12px; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+button { font: inherit; cursor: pointer; border-radius: 8px; }
+.run { padding: 10px 18px; border: 0; background: var(--accent); color: var(--panel); font-weight: 600; }
+.run:disabled { opacity: .6; cursor: wait; }
+.reset { padding: 10px 14px; color: var(--muted); background: transparent; border: 1px solid var(--line); }
+.examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.examples button { padding: 4px 10px; font-size: 13px; color: var(--muted); background: transparent; border: 1px solid var(--line); }
+.notice { display: none; margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: var(--warn-bg); color: var(--warn-text); }
+svg { display: block; width: 100%; height: auto; }
+.node rect { fill: var(--bg); stroke: var(--line); stroke-width: 1.5; }
+.node text { fill: var(--text); font-size: 14px; font-weight: 600; text-anchor: middle; }
+.node text.state { fill: var(--muted); font-size: 11.5px; font-weight: 400; }
+.node.on rect { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
+.node.skip rect { stroke-dasharray: 5 4; }
+.node.skip text { fill: var(--muted); font-weight: 400; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.5; }
+.edge.on { stroke: var(--accent); stroke-width: 2; }
+.edge.skip { stroke-dasharray: 5 4; }
+p { margin: 0 0 14px; }
+ol { margin: 0; padding-left: 20px; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>JEV Playground</h1>
+  <p class="sub">JEV가 기존 컨텍스트로 답할지, 새로 검색할지 판단하는 흐름을 보여줍니다. 질문할 때마다 실제 API 비용이 발생할 수 있습니다.</p>
+
+  <div class="panel">
+    <form id="form">
+      <input id="question" placeholder="질문을 입력하세요" autocomplete="off" required>
+      <button class="run" id="run">질문</button>
+      <button class="reset" id="reset" type="button">새 대화</button>
+    </form>
+    <div class="examples" id="examples"></div>
+  </div>
+  <div class="notice" id="notice" role="status"></div>
+
+  <div class="panel">
+    <h2>처리 경로</h2>
+    <svg viewBox="0 0 640 290" role="img" aria-label="질문이 JEV 판단을 거쳐 기존 컨텍스트 또는 DB 검색과 RRF를 지나 LLM으로 가는 다이어그램">
+      <path class="edge" id="e-question" d="M90 145H120"/>
+      <path class="edge" id="e-context" d="M210 145C235 145 235 50 260 50"/>
+      <path class="edge" id="e-context-llm" d="M480 50C510 50 500 145 530 145"/>
+      <path class="edge" id="e-vector" d="M210 145H260"/>
+      <path class="edge" id="e-graph" d="M210 145C235 145 235 240 260 240"/>
+      <path class="edge" id="e-vector-rrf" d="M370 145C390 145 390 195 410 195"/>
+      <path class="edge" id="e-graph-rrf" d="M370 240C390 240 390 195 410 195"/>
+      <path class="edge" id="e-rrf-llm" d="M480 195C505 195 505 145 530 145"/>
+      <g class="node" id="n-question"><rect x="10" y="120" width="80" height="50" rx="8"/><text x="50" y="150">질문</text></g>
+      <g class="node" id="n-jev"><rect x="120" y="115" width="90" height="60" rx="8"/><text x="165" y="141">JEV</text><text class="state" id="s-jev" x="165" y="160">대기</text></g>
+      <g class="node" id="n-context"><rect x="260" y="20" width="220" height="60" rx="8"/><text x="370" y="46">기존 컨텍스트</text><text class="state" id="s-context" x="370" y="65">검색 비용 절감</text></g>
+      <g class="node" id="n-vector"><rect x="260" y="115" width="110" height="60" rx="8"/><text x="315" y="141">벡터 DB</text><text class="state" id="s-vector" x="315" y="160">-</text></g>
+      <g class="node" id="n-graph"><rect x="260" y="210" width="110" height="60" rx="8"/><text x="315" y="236">그래프 DB</text><text class="state" id="s-graph" x="315" y="255">-</text></g>
+      <g class="node" id="n-rrf"><rect x="410" y="165" width="70" height="60" rx="8"/><text x="445" y="200">RRF</text></g>
+      <g class="node" id="n-llm"><rect x="530" y="115" width="100" height="60" rx="8"/><text x="580" y="150">LLM</text></g>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <h2>판단 근거</h2>
+    <p id="reason">아직 질문하지 않았습니다.</p>
+  </div>
+
+  <div class="panel">
+    <h2>답변</h2>
+    <p id="answer">-</p>
+    <h2>핵심 문구</h2>
+    <ol id="evidence"></ol>
+    <h2>참조한 청크</h2>
+    <ol id="sources"></ol>
+  </div>
+</main>
+<script>
+const EXAMPLES = [
+  "재택근무 규정은 누가 승인했어?",
+  "그 규정의 소유 부서는 어디야?",
+  "E4012 오류는 왜 발생해?",
+];
+const NODES = ["question", "jev", "context", "vector", "graph", "rrf", "llm"];
+const EDGES = ["question", "context", "context-llm", "vector", "graph", "vector-rrf", "graph-rrf", "rrf-llm"];
+const $ = (id) => document.getElementById(id);
+const percent = (value) => `${Math.round(value * 100)}%`;
+let threadId = null;
+
+function showNotice(text) {
+  $("notice").textContent = text;
+  $("notice").style.display = text ? "block" : "none";
+}
+
+function paint(activeNodes, activeEdges) {
+  NODES.forEach((name) => {
+    $(`n-${name}`).classList.toggle("on", activeNodes.includes(name));
+    $(`n-${name}`).classList.toggle("skip", !activeNodes.includes(name));
+  });
+  EDGES.forEach((name) => {
+    $(`e-${name}`).classList.toggle("on", activeEdges.includes(name));
+    $(`e-${name}`).classList.toggle("skip", !activeEdges.includes(name));
+  });
+}
+
+function reasonText(d) {
+  if (d.contextProbability != null) {
+    const verdict = d.route === "CONTEXT" ? "기존 컨텍스트로 답변" : "새로 검색";
+    return `JEV 판단: 기존 컨텍스트로 답할 수 있을 확률 ${percent(d.contextProbability)} → ${verdict}`;
+  }
+  if (d.fallbackReason) return `${d.fallbackReason} JEV 판단 없이 새로 검색했습니다.`;
+  return "저장된 컨텍스트가 없어 JEV를 호출하지 않고 바로 검색했습니다.";
+}
+
+function render(d) {
+  threadId = d.threadId;
+  const usedLlm = d.sources.length > 0;
+  const nodes = ["question"];
+  const edges = ["question"];
+  if (d.contextProbability != null) nodes.push("jev");
+  $("s-jev").textContent = d.contextProbability != null ? percent(d.contextProbability) : "호출 안 함";
+  if (d.route === "CONTEXT") {
+    nodes.push("context", "llm");
+    edges.push("context", "context-llm");
+    $("s-vector").textContent = "호출 안 함";
+    $("s-graph").textContent = "호출 안 함";
+  } else {
+    nodes.push("rrf");
+    if (usedLlm) { nodes.push("llm"); edges.push("rrf-llm"); }
+    ["vector", "graph"].forEach((name) => {
+      const failed = d.failedSources.includes(name);
+      $(`s-${name}`).textContent = failed ? "실패" : "검색";
+      if (!failed) { nodes.push(name); edges.push(name, `${name}-rrf`); }
+    });
+  }
+  paint(nodes, edges);
+  $("reason").textContent = reasonText(d);
+  $("answer").textContent = d.answer;
+  $("evidence").replaceChildren(...d.evidence.map((item) => {
+    const row = document.createElement("li");
+    row.textContent = `[${item.source}] ${item.quote}`;
+    return row;
+  }));
+  $("sources").replaceChildren(...d.sources.map((chunk) => {
+    const item = document.createElement("li");
+    item.textContent = `[${chunk.source}] ${chunk.text}`;
+    return item;
+  }));
+  showNotice(d.failedSources.length ? `검색 실패: ${d.failedSources.join(", ")}. 나머지 결과로 답변했습니다.` : "");
+}
+
+async function run(question) {
+  $("run").disabled = true;
+  showNotice("");
+  try {
+    const res = await fetch("/api/v1/agent/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: question, threadId }),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.message || `HTTP ${res.status}`);
+    render(body);
+  } catch (err) {
+    showNotice(`요청 실패: ${err.message} 서버 로그를 확인하세요.`);
+  } finally {
+    $("run").disabled = false;
+  }
+}
+
+EXAMPLES.forEach((text) => {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = text;
+  button.onclick = () => { $("question").value = text; run(text); };
+  $("examples").append(button);
+});
+$("form").onsubmit = (event) => {
+  event.preventDefault();
+  const question = $("question").value.trim();
+  if (question) run(question);
+};
+$("reset").onclick = () => {
+  threadId = null;
+  paint([], []);
+  ["vector", "graph"].forEach((name) => { $(`s-${name}`).textContent = "-"; });
+  $("s-jev").textContent = "대기";
+  $("reason").textContent = "아직 질문하지 않았습니다.";
+  $("answer").textContent = "-";
+  $("evidence").replaceChildren();
+  $("sources").replaceChildren();
+  showNotice("");
+};
+</script>
+</body>
+</html>
