@@ -74,6 +74,16 @@ NO_DOCUMENT_PROMPT = f"""사내 문서 도우미로 대화한다. 지금은 문�
 - 회사 정책, 수치, 담당 부서, 절차를 말하거나 추측하지 않는다.
 다음 형식의 JSON 객체 하나만 응답한다. clarification은 되물을 때만 true로 쓴다.
 {{"answer": "답변", "clarification": false}}"""
+# 수정 요청일 때만 답변 호출에 덧붙인다. 모델은 제안만 하고 적용은 사용자가 고른다
+EDIT_REQUEST_INSTRUCTION = """이번 말은 문서 수정 요청이다. 문서를 고치지 말고 수정안만 제안한다.
+- answer에는 무엇을 어떻게 바꾸자는 제안인지 짧게 쓰고, 아래 제안에서 변경 또는 유지를 고르라고 안내한다.
+  이미 고쳤다고 쓰지 않는다.
+- 사용자가 요청한 값과 이전 대화에서 정해진 대상만 바꾼다. 요청에 없는 사실이나 값을 지어내지 않는다.
+- 어떤 값이나 문서로 맞출지 알 수 없으면 edits를 비우고 answer에서 무엇으로 맞출지 되묻는다.
+- 이미 요청한 값과 같은 문서는 제안하지 않는다.
+- JSON에 다음 항목을 더한다. 문서마다 바꿀 문장을 각각 담는다.
+"edits": [{"chunk": 1, "before": "컨텍스트 원문을 한 글자도 바꾸지 않고 복사한 문장",
+ "after": "수정한 문장", "reason": "이유"}]"""
 CLARIFICATION_KEY = "clarification"
 NO_REPEAT_CLARIFICATION = "직전에 이미 되물었으므로 이번에는 되묻지 말고 답하거나 거절 문장을 쓴다."
 # 문서가 없으므로 답하라는 말이 사실을 지어내는 신호가 되지 않게 거절만 허용한다
@@ -89,12 +99,16 @@ def is_clarification(message: BaseMessage) -> bool:
     return bool(message.additional_kwargs.get(CLARIFICATION_KEY))
 
 
-def build_prompt(question: str, context: list[Chunk], allow_clarification: bool = True) -> str:
+def build_prompt(
+    question: str, context: list[Chunk], allow_clarification: bool = True, edit_request: bool = False
+) -> str:
     chunks = "\n".join(
         f"{number}. [{_neutralize_tags(chunk['source'] or '출처 미상')}] {_neutralize_tags(chunk['text'])}"
         for number, chunk in enumerate(context, start=1)
     )
     prompt = f"<context>\n{chunks}\n</context>\n\n질문: {question}"
+    if edit_request:
+        prompt = f"{prompt}\n\n{EDIT_REQUEST_INSTRUCTION}"
     return prompt if allow_clarification else f"{prompt}\n\n{NO_REPEAT_CLARIFICATION}"
 
 
@@ -113,11 +127,15 @@ async def _invoke(model_name: str, messages: list[BaseMessage]) -> str:
     return response.text
 
 
-async def generate_answer(question: str, context: list[Chunk], history: list[BaseMessage]) -> str:
+async def generate_answer(
+    question: str, context: list[Chunk], history: list[BaseMessage], edit_request: bool = False
+) -> str:
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),
         *history,
-        HumanMessage(content=build_prompt(question, context, not (history and is_clarification(history[-1])))),
+        HumanMessage(
+            content=build_prompt(question, context, not (history and is_clarification(history[-1])), edit_request)
+        ),
     ]
     return await generate_structured_response(messages)
 

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import time
@@ -8,11 +9,11 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
-from app.agent.evidence import Evidence, Keyword, parse_answer
+from app.agent.evidence import EditProposal, Evidence, Keyword, parse_answer, parse_edit_proposals
 from app.core import config
 from app.core.errors import AiUnavailableError, describe_exception
 from app.core.schemas import AccessScope, SearchFilters
-from app.jev.client import can_answer_probability, small_talk_probability
+from app.jev.client import can_answer_probability, edit_request_probability, small_talk_probability
 from app.llm.client import (
     CLARIFICATION_KEY,
     NO_EVIDENCE_ANSWER,
@@ -30,6 +31,8 @@ logger = logging.getLogger(__name__)
 CONTEXT_REUSE_THRESHOLD = 0.7
 # 문서 질문이 잘못 넘어가면 근거 없이 거절되므로 높게 잡는다
 SMALL_TALK_THRESHOLD = 0.9
+# 잘못 판단해도 제안만 나가고 문서는 바뀌지 않는다. 일반 질문에 제안이 붙지 않게 높게 잡는다
+EDIT_REQUEST_THRESHOLD = 0.8
 HISTORY_LIMIT = 6
 # 질문만으로는 검색어가 부족한 후속 질문. "그룹"처럼 단어의 일부인 경우는 제외한다
 FOLLOW_UP_PATTERN = re.compile(r"^(그럼|그러면|그건|그게|그거|그것|그 |이건|이게|이거|이 경우|앞서|위 )")
@@ -42,6 +45,8 @@ AnswerType = Literal["ANSWER", "NO_EVIDENCE", "CLARIFICATION", "SMALL_TALK"]
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     small_talk: bool
+    edit_request: bool
+    edit_proposals: list[EditProposal]
     alternate_query: str | None
     answer_type: AnswerType
     context: list[Chunk]
@@ -62,14 +67,21 @@ def _history(state: AgentState) -> list[AnyMessage]:
 async def judge_small_talk(state: AgentState) -> dict:
     # "네"처럼 되물음에 답한 말은 일상 대화로 보내지 않는다
     if not config.jev_api_key() or _follows_clarification(state):
-        return {"small_talk": False}
-    try:
-        probability = await small_talk_probability(state["messages"][-1].text)
-    except Exception as exc:
-        # 판단하지 못하면 문서 검색으로 진행한다
-        logger.error("Small talk judge failed: %s", describe_exception(exc))
-        return {"small_talk": False}
-    return {"small_talk": probability >= SMALL_TALK_THRESHOLD}
+        return {"small_talk": False, "edit_request": False, "edit_proposals": []}
+    question = state["messages"][-1].text
+    small_talk_result, edit_result = await asyncio.gather(
+        small_talk_probability(question), edit_request_probability(question), return_exceptions=True
+    )
+    # 판단하지 못하면 문서 검색으로 진행한다
+    if isinstance(small_talk_result, Exception):
+        logger.error("Small talk judge failed: %s", describe_exception(small_talk_result))
+    if isinstance(edit_result, Exception):
+        logger.error("Edit request judge failed: %s", describe_exception(edit_result))
+    return {
+        "small_talk": not isinstance(small_talk_result, Exception) and small_talk_result >= SMALL_TALK_THRESHOLD,
+        "edit_request": not isinstance(edit_result, Exception) and edit_result >= EDIT_REQUEST_THRESHOLD,
+        "edit_proposals": [],
+    }
 
 
 def select_small_talk(state: AgentState) -> str:
@@ -139,7 +151,8 @@ def _follows_clarification(state: AgentState) -> bool:
 def _search_query(state: AgentState) -> str:
     question = state["messages"][-1].text
     # "숙박비요"처럼 되물음에 답한 말은 그것만으로 검색하면 질문의 뜻을 잃는다
-    if not FOLLOW_UP_PATTERN.match(question) and not _follows_clarification(state):
+    # "최대 5일로 수정해줘"도 앞선 질문 없이는 어떤 문서인지 알 수 없다
+    if not FOLLOW_UP_PATTERN.match(question) and not _follows_clarification(state) and not state.get("edit_request"):
         return question
     previous = next((message.text for message in reversed(_history(state)) if message.type == "human"), None)
     return f"{previous}\n{question}" if previous else question
@@ -192,7 +205,9 @@ async def _answer_with_documents(state: AgentState, context: list[Chunk], altern
     question = state["messages"][-1].text
     if alternate_query:
         question = f"{question}\n(같은 뜻의 다른 표기: {alternate_query})"
-    response = await generate_answer(question, context, _history(state))
+    edit_request = state.get("edit_request", False)
+    extra = {"edit_request": True} if edit_request else {}
+    response = await generate_answer(question, context, _history(state), **extra)
     answer, evidence, clarification, keywords = parse_answer(response, context)
     # 두 번 연달아 되묻지 않는다. 모델이 어기면 일반 답변으로 내보낸다
     clarification = clarification and not _follows_clarification(state)
@@ -200,11 +215,13 @@ async def _answer_with_documents(state: AgentState, context: list[Chunk], altern
     message = AIMessage(content=answer, additional_kwargs={CLARIFICATION_KEY: True} if clarification else {})
     refused = answer == NO_EVIDENCE_ANSWER
     answer_type = "CLARIFICATION" if clarification else "NO_EVIDENCE" if refused else "ANSWER"
+    refuse_or_ask = clarification or refused
     # 쓰이지 않은 청크를 출처로 보여 주거나 다음 턴에 재사용하지 않는다
     return {
         "messages": [message],
         "evidence": evidence,
         "keywords": keywords,
+        "edit_proposals": parse_edit_proposals(response, context) if edit_request and not refuse_or_ask else [],
         "answer_type": answer_type,
         "context": [] if clarification or refused else context,
     }

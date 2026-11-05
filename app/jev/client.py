@@ -20,6 +20,13 @@ SMALL_TALK = Noul(
     ),
 )
 
+EDIT_REQUEST = Noul(
+    instructions=(
+        "사용자가 내용을 묻는 것이 아니라 사내 문서의 내용을 수정, 변경, 통일하거나 "
+        "문서 간 충돌을 특정 값으로 맞춰 달라고 요청한다"
+    ),
+)
+
 _client: AsyncTypeSafeClient | None = None
 _client_settings: tuple[str | None, str] | None = None
 
@@ -74,3 +81,12 @@ async def small_talk_probability(question: str) -> float:
         questions={"small_talk": SMALL_TALK},
     )
     return response.nouls["small_talk"].noul
+
+
+async def edit_request_probability(question: str) -> float:
+    client = await _get_client()
+    response = await client.system_one(
+        state=f"[사용자 질문]\n{_neutralize_markers(question)}",
+        questions={"edit_request": EDIT_REQUEST},
+    )
+    return response.nouls["edit_request"].noul
