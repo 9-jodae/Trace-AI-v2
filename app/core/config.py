@@ -78,6 +78,12 @@ def uses_aws_credentials(model: str) -> bool:
     return model.startswith("bedrock")
 
 
+def bedrock_options() -> dict:
+    # 서버의 AWS_REGION은 다른 서비스용일 수 있고 .env로 덮어쓰이지 않으므로 Bedrock 리전을 따로 지정한다
+    region = os.getenv("BEDROCK_REGION")
+    return {"region_name": region} if region else {}
+
+
 def jev_api_key() -> str | None:
     return os.getenv("JEV_API_KEY") or None
 
