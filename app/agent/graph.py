@@ -9,6 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
+from app.agent.catalog import describe_catalog, is_catalog_question
 from app.agent.evidence import (
     EditProposal,
     Evidence,
@@ -36,6 +37,7 @@ from app.retrieval.service import (
     SearchResult,
     fetch_known_conflicts,
     filter_accessible_context,
+    list_accessible_documents,
     search,
 )
 
@@ -120,6 +122,7 @@ AnswerType = Literal["ANSWER", "NO_EVIDENCE", "CLARIFICATION", "SMALL_TALK"]
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     small_talk: bool
+    catalog: bool
     edit_request: bool
     edit_proposals: list[EditProposal]
     alternate_query: str | None
@@ -146,6 +149,9 @@ async def judge_small_talk(state: AgentState) -> dict:
     question = state["messages"][-1].text
     if _follows_clarification(state):
         return {"small_talk": False, "edit_request": False, "edit_proposals": []}
+    # 문서·청크 수나 목록은 검색이 아니라 DB에서 세어 답한다. JEV와 LLM을 부르지 않는다
+    if is_catalog_question(question):
+        return {"small_talk": False, "catalog": True, "edit_request": False, "edit_proposals": []}
     pattern_match = EDIT_REQUEST_PATTERN.search(question) is not None
     if not config.jev_api_key():
         return {"small_talk": False, "edit_request": pattern_match, "edit_proposals": []}
@@ -172,7 +178,28 @@ async def judge_small_talk(state: AgentState) -> dict:
 
 
 def select_small_talk(state: AgentState) -> str:
+    if state.get("catalog"):
+        return "catalog"
     return "small_talk" if state["small_talk"] else "judge_context"
+
+
+async def catalog(state: AgentState) -> dict:
+    filters = state.get("filters")
+    documents = await list_accessible_documents(filters, state.get("access_scope"))
+    answer = describe_catalog(state["messages"][-1].text, documents, filters is not None)
+    # 근거 청크가 없는 답이라 출처와 다음 턴 근거는 비운다. route 값은 서버 계약이 정해질 때까지 늘리지 않는다
+    return {
+        "messages": [AIMessage(content=answer)],
+        "evidence": [],
+        "keywords": [],
+        "edit_proposals": [],
+        "answer_type": "ANSWER" if documents else "NO_EVIDENCE",
+        "context": [],
+        "route": "SEARCH",
+        "context_probability": None,
+        "failed_sources": [],
+        "fallback_reason": None,
+    }
 
 
 def select_after_small_talk(state: AgentState) -> str:
@@ -436,11 +463,13 @@ def build_agent():
     graph = StateGraph(AgentState)
     graph.add_node("judge_small_talk", _timed("judge_small_talk", lambda state: judge_small_talk(state)))
     graph.add_node("small_talk", _timed("small_talk", lambda state: small_talk(state)))
+    graph.add_node("catalog", _timed("catalog", lambda state: catalog(state)))
     graph.add_node("judge_context", _timed("judge_context", lambda state: judge_context(state)))
     graph.add_node("retrieve", _timed("retrieve", lambda state: retrieve(state)))
     graph.add_node("generate", _timed("generate", lambda state: generate(state)))
     graph.add_edge(START, "judge_small_talk")
-    graph.add_conditional_edges("judge_small_talk", select_small_talk, ["small_talk", "judge_context"])
+    graph.add_conditional_edges("judge_small_talk", select_small_talk, ["catalog", "small_talk", "judge_context"])
+    graph.add_edge("catalog", END)
     graph.add_conditional_edges("small_talk", select_after_small_talk, ["judge_context", END])
     graph.add_conditional_edges("judge_context", select_route, ["generate", "retrieve"])
     graph.add_edge("retrieve", "generate")

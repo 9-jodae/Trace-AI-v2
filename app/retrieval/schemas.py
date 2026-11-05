@@ -61,6 +61,13 @@ class RelationAssertion(TypedDict):
     condition_quote: str | None
 
 
+class CatalogDocument(TypedDict):
+    id: str
+    title: str
+    document_type: str | None
+    chunk_count: int
+
+
 class RegisteredConflict(TypedDict):
     item: str
     source: str

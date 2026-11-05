@@ -12,7 +12,7 @@ from app.core.schemas import AccessScope, SearchFilters
 from app.retrieval.embedding import embed_query
 from app.retrieval.fusion import distinct_documents_first, rrf_fuse
 from app.retrieval.neo4j_store import Neo4jGraphStore
-from app.retrieval.schemas import Chunk, RegisteredConflict
+from app.retrieval.schemas import CatalogDocument, Chunk, RegisteredConflict
 from app.retrieval.stores import (
     CHUNK_EMBEDDING_DIMENSIONS,
     GraphStore,
@@ -184,6 +184,21 @@ async def fetch_known_conflicts(
             }
         )
     return {"chunks": list(chunks.values()), "conflicts": registered}
+
+
+async def list_accessible_documents(
+    filters: SearchFilters | None = None, request_scope: AccessScope | None = None
+) -> list[CatalogDocument]:
+    """호출자가 검색에 쓸 수 있는 문서와 청크 수. 권한 범위를 모르면 아무것도 세지 않는다."""
+    scope = request_scope or config.access_scope()
+    if scope is None and not config.use_sample_data():
+        return []
+    vector_store, _ = get_stores()
+    try:
+        return await vector_store.accessible_documents(scope, filters)
+    except Exception as exc:
+        logger.error("Document catalog failed: %s", describe_exception(exc))
+        raise AiUnavailableError("문서 목록을 읽지 못했습니다.") from exc
 
 
 async def search(
