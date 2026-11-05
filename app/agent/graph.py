@@ -8,7 +8,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
-from app.agent.evidence import Evidence, parse_answer
+from app.agent.evidence import Evidence, Keyword, parse_answer
 from app.core import config
 from app.core.errors import AiUnavailableError, describe_exception
 from app.core.schemas import AccessScope, SearchFilters
@@ -48,6 +48,7 @@ class AgentState(TypedDict):
     filters: SearchFilters | None
     access_scope: AccessScope | None
     evidence: list[Evidence]
+    keywords: list[Keyword]
     route: Literal["CONTEXT", "SEARCH"]
     context_probability: float | None
     failed_sources: list[str]
@@ -172,7 +173,7 @@ async def _reply_without_documents(state: AgentState) -> dict:
     else:
         answer_type = "NO_EVIDENCE" if answer == NO_EVIDENCE_ANSWER else "SMALL_TALK"
     message = AIMessage(content=answer, additional_kwargs={CLARIFICATION_KEY: True} if clarification else {})
-    return {"messages": [message], "evidence": [], "answer_type": answer_type}
+    return {"messages": [message], "evidence": [], "keywords": [], "answer_type": answer_type}
 
 
 async def _alternate_search(state: AgentState) -> tuple[str, SearchResult] | None:
@@ -192,7 +193,7 @@ async def _answer_with_documents(state: AgentState, context: list[Chunk], altern
     if alternate_query:
         question = f"{question}\n(같은 뜻의 다른 표기: {alternate_query})"
     response = await generate_answer(question, context, _history(state))
-    answer, evidence, clarification = parse_answer(response, context)
+    answer, evidence, clarification, keywords = parse_answer(response, context)
     # 두 번 연달아 되묻지 않는다. 모델이 어기면 일반 답변으로 내보낸다
     clarification = clarification and not _follows_clarification(state)
     # 다음 턴의 대화 기록에는 JSON이 아니라 답변만 남긴다
@@ -203,6 +204,7 @@ async def _answer_with_documents(state: AgentState, context: list[Chunk], altern
     return {
         "messages": [message],
         "evidence": evidence,
+        "keywords": keywords,
         "answer_type": answer_type,
         "context": [] if clarification or refused else context,
     }
