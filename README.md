@@ -26,4 +26,6 @@ python main.py
 
 [개발 규약](docs/conventions.md)을 확인하세요. PR 전에는 `ruff check . && pytest`를 실행합니다.
 
+Entity·업무 관계 저장 구조는 [Entity·Relation 검색 스키마](docs/entity-relation-schema.md)를 확인하세요.
+
 서버 간 계약은 `docs199-Server` 저장소의 `docs/ai-server-contract.md`에 기록합니다. 아직 확정되지 않은 항목이 있습니다.

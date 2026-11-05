@@ -100,6 +100,10 @@ async def search(
     async def search_graph() -> list[Chunk]:
         # Neo4j 제목 매칭 결과를 먼저 PostgreSQL에서 허용된 현재 문서인지 확인한 뒤에만 관계를 확장한다.
         seed_ids = await graph_store.seed_documents(query)
+        entity_seed_ids = []
+        if isinstance(graph_store, Neo4jGraphStore):
+            entity_seed_ids = await graph_store.search_from_entities(query, GRAPH_CANDIDATE_LIMIT)
+        seed_ids = list(dict.fromkeys([*seed_ids, *entity_seed_ids]))
         if not seed_ids:
             return []
         allowed_seed_ids = await vector_store.accessible_document_ids(seed_ids, scope, filters)
