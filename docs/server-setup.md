@@ -32,7 +32,7 @@ python3 -m venv .venv
 | `EMBEDDING_MODEL` | `bedrock:amazon.titan-embed-text-v2:0` | 인스턴스 역할 사용 |
 | `EMBEDDING_DIMENSIONS` | `1024` | |
 | `AWS_REGION` | `ap-northeast-1` | 중계 API와 같은 도쿄 리전 |
-| `LLM_MODEL` | Bedrock Claude 모델 ID | 백엔드 확인 필요 |
+| `LLM_MODEL` | `bedrock:jp.anthropic.claude-haiku-4-5-20251001-v1:0` | 도쿄 리전 추론 프로필 |
 | `NEO4J_URI`, `JEV_API_KEY` | 비움 | 중간 발표 범위 밖 |
 
 `USE_SAMPLE_DATA`와 `ACCESS_*`, `EMBEDDING_PROXY_URL`은 넣지 않습니다. 운영 모드에서 샘플 설정은 시작 실패이고, 나머지는 무시합니다.
