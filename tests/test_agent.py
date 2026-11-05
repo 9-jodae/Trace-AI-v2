@@ -268,3 +268,11 @@ class TestAlternateSearch:
         ai.small_talk = 0.99
         body = ask("리브 팔러시가 뭐야?").json()
         assert len(ai.search_calls) == 1 and body["answer"].startswith("답변")
+
+    def test_small_talk_clarification_falls_through_to_search(self, ask, ai):
+        # 문서에 나오는 이름을 잡담으로 보고 되물으면 검색으로 다시 찾는다
+        ai.small_talk = 0.99
+        ai.reply = "무엇을 말씀하시는지 명확하지 않습니다."
+        ai.reply_clarification = True
+        body = ask("새결이 뭘까요?").json()
+        assert len(ai.search_calls) == 1 and body["answer"].startswith("답변")

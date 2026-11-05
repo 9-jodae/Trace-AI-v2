@@ -21,6 +21,9 @@ DOCS = [
         "문서 몇 개 있어?",
         "볼 수 있는 문서 목록 보여줘",
         "전체 문서는 몇 개인가요?",
+        "지금 등록 문서 수가 어떻게 됨?",
+        "지금 등록된 문서 수가 얼마나 됨?",
+        "청크 수는?",
     ],
 )
 def test_catalog_questions_match(text):
@@ -29,7 +32,15 @@ def test_catalog_questions_match(text):
 
 @pytest.mark.parametrize(
     "text",
-    ["연차 관련 문서 뭐 있어?", "출장 문서 몇 개야?", "문서 간 충돌 찾아줘", "연차 며칠이야?", "안녕"],
+    [
+        "연차 관련 문서 뭐 있어?",
+        "출장 문서 몇 개야?",
+        "문서 간 충돌 찾아줘",
+        "연차 며칠이야?",
+        "안녕",
+        "문서 어떻게 써?",
+        "새결이 뭘까요?",
+    ],
 )
 def test_topic_or_other_questions_do_not_match(text):
     assert not is_catalog_question(text)

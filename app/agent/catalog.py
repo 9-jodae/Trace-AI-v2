@@ -4,7 +4,8 @@ from app.retrieval.schemas import CatalogDocument
 
 # 문서·청크 수나 목록을 묻는 말. 주제 단어가 섞이면 내용 검색으로 보낸다
 CATALOG_SUBJECT_PATTERN = re.compile(r"문서|자료|청크")
-CATALOG_ASK_PATTERN = re.compile(r"몇|개수|목록|리스트|뭐뭐|종류|얼마나|총|전부|전체|무슨|어떤")
+# "문서 수가 어떻게 됨?"처럼 수를 직접 묻는 말도 받는다
+CATALOG_ASK_PATTERN = re.compile(r"몇|개수|목록|리스트|뭐뭐|종류|얼마나|총|전부|전체|무슨|어떤|(문서|청크|자료)\s*수")
 CATALOG_LIST_PATTERN = re.compile(r"목록|리스트|뭐뭐|종류|무슨|어떤|제목")
 CATALOG_GENERIC_WORDS = (
     "ai",
@@ -65,6 +66,14 @@ CATALOG_GENERIC_WORDS = (
     "되어",
     "저장",
     "올라",
+    "어떻게",
+    "됨",
+    "됐",
+    "인지",
+    "인가",
+    "임",
+    "나",
+    "요",
 )
 TYPE_LABELS = {"HANDOVER": "인수인계", "APPROVAL": "결재", "REPORT": "보고서", "PRESENTATION": "발표", "ETC": "기타"}
 MAX_LISTED_TITLES = 30
