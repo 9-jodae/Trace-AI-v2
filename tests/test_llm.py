@@ -110,6 +110,10 @@ class TestGenerateAnswer:
         system = model.messages[0].content
         assert '"evidence"' in system and "그대로 복사" in system
 
+    def test_system_prompt_sets_answer_style(self):
+        assert "첫 문장에 질문의 답" in llm.SYSTEM_PROMPT and "확인되지 않음:" in llm.SYSTEM_PROMPT
+        assert llm.NO_EVIDENCE_ANSWER in llm.SYSTEM_PROMPT
+
     def test_system_prompt_guards(self, model):
         run()
         system = model.messages[0].content
