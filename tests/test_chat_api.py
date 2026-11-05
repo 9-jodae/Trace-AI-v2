@@ -7,7 +7,7 @@ from app.agent.schemas import MAX_MESSAGE_LENGTH
 URL = "/api/v1/agent/chat"
 RESPONSE_FIELDS = {
     "threadId",
-    "answer",
+    "answer", "answerType",
     "route",
     "contextProbability",
     "sources",

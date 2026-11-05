@@ -43,6 +43,7 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     return ChatResponse(
         thread_id=thread_id,
         answer=result["messages"][-1].text,
+        answer_type=result["answer_type"],
         route=result["route"],
         context_probability=result["context_probability"],
         sources=result["context"],

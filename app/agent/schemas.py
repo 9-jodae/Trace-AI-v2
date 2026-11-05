@@ -52,6 +52,8 @@ class EvidenceQuote(CamelModel):
 class ChatResponse(CamelModel):
     thread_id: str
     answer: str
+    # TODO: 이름과 값은 서버 계약에서 확정 (docs199-Server#76)
+    answer_type: Literal["ANSWER", "NO_EVIDENCE", "CLARIFICATION", "SMALL_TALK"]
     route: Literal["CONTEXT", "SEARCH"]
     context_probability: float | None
     sources: list[SourceChunk]
