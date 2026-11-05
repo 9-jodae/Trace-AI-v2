@@ -100,6 +100,9 @@ async def _follow_chain(
         reached.extend(frontier)
     present = {chunk["id"] for chunk in chunks}
     chunk_ids = [chunk_id for chunk_id in await graph_store.document_chunks(reached) if chunk_id not in present]
+    if embedding is None:
+        # 질문 임베딩이 실패해도 전문 검색으로 찾은 문서의 참조는 쓸 수 있다. 이때는 가까운 순서를 모른다
+        return (await vector_store.fetch_accessible(chunk_ids, scope, filters))[:CHAIN_CONTEXT_LIMIT]
     # 질문과 표현이 다른 문서를 찾는 경로라 거리로 잘라내지 않고, 가까운 순서로 몇 개만 고른다
     return await vector_store.nearest_accessible(chunk_ids, scope, filters, embedding, CHAIN_CONTEXT_LIMIT)
 
@@ -179,7 +182,7 @@ async def search(
     chunks = rrf_fuse(rankings, CONTEXT_LIMIT)
     if chunks and isinstance(graph_store, Neo4jGraphStore) and config.graph_search_enabled():
         try:
-            embedding = await query_embedding
+            embedding = None if query_embedding.exception() else query_embedding.result()
             chain = await _follow_chain(vector_store, graph_store, chunks, scope, filters, embedding)
         except Exception as exc:
             logger.error("chain search failed: %s", describe_exception(exc))

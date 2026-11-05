@@ -549,6 +549,26 @@ class TestChainSearch:
         assert [item["id"] for item in result["chunks"]] == [f"v{i}" for i in range(5)]
         assert result["failed_sources"] == ["chain"]
 
+    def test_embedding_failure_still_follows_references(self, chain, monkeypatch):
+        vector, graph = chain
+        graph.links = {"d0": ["x1"]}
+
+        async def fail(query):
+            raise RuntimeError("embedding down")
+
+        async def fetch(chunk_ids, scope, filters=None, embedding=None):
+            return [{**chunk(chunk_id), "document_id": chunk_id.removesuffix("-chunk")} for chunk_id in chunk_ids]
+
+        async def fulltext(query, limit, scope, filters=None):
+            return [{**chunk("v0"), "document_id": "d0"}]
+
+        monkeypatch.setattr(service, "embed_query", fail)
+        vector.fetch_accessible = fetch
+        vector.fulltext = fulltext
+        result = asyncio.run(service.search("질문", None, SCOPE))
+        assert [item["id"] for item in result["chunks"]] == ["v0", "x1-chunk"]
+        assert result["failed_sources"] == ["vector"] and vector.nearest_calls == []
+
     def test_disabled_does_not_follow(self, chain, monkeypatch):
         _, graph = chain
         monkeypatch.setenv("GRAPH_SEARCH_ENABLED", "false")
