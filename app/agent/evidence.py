@@ -155,6 +155,39 @@ def _is_valid_clarification(raw: Any, context: list[Chunk]) -> bool:
     return len(chunks) >= MIN_CLARIFICATION_OPTIONS
 
 
+def _escape_inner_quotes(text: str) -> str:
+    """문자열 안에 이스케이프하지 않은 큰따옴표를 고친다. 뒤에 JSON 구분자가 오지 않는 따옴표는 문자열의 일부로 본다."""
+    repaired: list[str] = []
+    in_string = escaped = False
+    for index, char in enumerate(text):
+        if in_string and escaped:
+            escaped = False
+        elif in_string and char == "\\":
+            escaped = True
+        elif char == '"' and in_string:
+            rest = text[index + 1 :].lstrip()
+            if rest[:1] not in (",", "}", "]", ":", ""):
+                repaired.append('\\"')
+                continue
+            in_string = False
+        elif char == '"':
+            in_string = True
+        repaired.append(char)
+    return "".join(repaired)
+
+
+def _decode_answer(text: str, start: int) -> Any:
+    # 답변 문자열 안의 실제 줄바꿈은 허용한다. 요약에 제목을 따옴표로 감싸 형식이 깨지는 일이 많아 한 번 고쳐 본다
+    decoder = json.JSONDecoder(strict=False)
+    try:
+        return decoder.raw_decode(text, start)[0]
+    except json.JSONDecodeError:
+        repaired = _escape_inner_quotes(text[start:])
+        data = decoder.raw_decode(repaired)[0]
+        logger.info("LLM answer repaired: inner quotes")
+        return data
+
+
 def _load_candidate(text: str) -> AnswerCandidate | None:
     # 모델이 형식을 어기고 설명이나 코드 블록을 덧붙여도 JSON 답변을 찾아 쓴다. JSON이 없으면 None
     match = ANSWER_OBJECT_PATTERN.search(text)
@@ -163,9 +196,7 @@ def _load_candidate(text: str) -> AnswerCandidate | None:
     try:
         if match is None:
             raise ValueError("answer 없음")
-        # 답변 문자열 안의 실제 줄바꿈은 허용한다
-        data, _ = json.JSONDecoder(strict=False).raw_decode(text, match.start())
-        return AnswerCandidate.model_validate(data)
+        return AnswerCandidate.model_validate(_decode_answer(text, match.start()))
     except ValueError as exc:
         # 잘린 JSON이나 빈 답변을 사용자에게 그대로 보여 주지 않는다. 응답 본문은 기록하지 않는다
         reason = exc.errors()[0]["type"] if isinstance(exc, ValidationError) else type(exc).__name__

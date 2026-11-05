@@ -9,10 +9,24 @@ from app.core.errors import AiUnavailableError
 TEXT = "앞부분입니다. 연차는 최대 15일입니다. 뒷부분입니다."
 QUOTE = "연차는 최대 15일입니다."
 CONTEXT = [
-    {"id": "a", "text": "무관한 내용", "source": "다른 문서", "document_id": "d0", "version_id": "v0",
-     "char_start": 0, "char_end": 6},
-    {"id": "b", "text": TEXT, "source": "휴가 규정", "document_id": "d1", "version_id": "v1",
-     "char_start": 100, "char_end": 100 + len(TEXT)},
+    {
+        "id": "a",
+        "text": "무관한 내용",
+        "source": "다른 문서",
+        "document_id": "d0",
+        "version_id": "v0",
+        "char_start": 0,
+        "char_end": 6,
+    },
+    {
+        "id": "b",
+        "text": TEXT,
+        "source": "휴가 규정",
+        "document_id": "d1",
+        "version_id": "v1",
+        "char_start": 100,
+        "char_end": 100 + len(TEXT),
+    },
 ]
 
 
@@ -228,3 +242,17 @@ class TestKeywords:
         )
         assert parse_answer(response, self.CONTEXT).keywords == []
 
+
+class TestInnerQuoteRepair:
+    def test_unescaped_quotes_inside_answer_are_repaired(self):
+        # 모델이 제목을 큰따옴표로 감싸고 이스케이프하지 않은 응답
+        response = '{"answer": ""기준 정리 업무 가이드"를 요약하면 "핵심"입니다.", "evidence": []}'
+        assert parse_answer(response, CONTEXT)[0] == '"기준 정리 업무 가이드"를 요약하면 "핵심"입니다.'
+
+    def test_valid_json_is_unchanged(self):
+        response = json.dumps({"answer": '그는 "네"라고 했다.', "evidence": []}, ensure_ascii=False)
+        assert parse_answer(response, CONTEXT)[0] == '그는 "네"라고 했다.'
+
+    def test_unrepairable_json_still_fails(self):
+        with pytest.raises(AiUnavailableError):
+            parse_answer('{"answer": "답", "evidence": [', CONTEXT)
