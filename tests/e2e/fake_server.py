@@ -52,6 +52,11 @@ async def generate_reply(question, allow_clarification=True):
     return NoDocumentReply(graph.NO_EVIDENCE_ANSWER, False)
 
 
+async def rewrite_query(question):
+    return None
+
+
+graph.rewrite_search_query = rewrite_query
 graph.small_talk_probability = small_talk_probability
 graph.generate_reply_without_documents = generate_reply
 graph.can_answer_probability = can_answer

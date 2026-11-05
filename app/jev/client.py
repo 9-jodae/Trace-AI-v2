@@ -14,7 +14,10 @@ CAN_ANSWER = Noul(
 )
 
 SMALL_TALK = Noul(
-    instructions="사용자의 말이 문서 내용을 묻지 않는 인사, 감사, 안부, 도우미 소개 요청 같은 일상 대화다",
+    instructions=(
+        "사용자의 말이 회사 규정, 절차, 업무, 사내 문서 내용을 묻는 것이 아니라 "
+        "인사, 일상 대화, 추천 요청, 일반 상식, 이 도우미의 기능에 관한 말이다"
+    ),
 )
 
 _client: AsyncTypeSafeClient | None = None
@@ -33,6 +36,7 @@ def build_state(question: str, context: list[Chunk], history: list[str]) -> str:
         f"[이전 대화]\n{conversation}\n\n[검색 컨텍스트]\n{chunks}\n\n"
         f"[사용자 질문]\n{_neutralize_markers(question)}"
     )
+
 
 
 async def _get_client() -> AsyncTypeSafeClient:

@@ -188,6 +188,7 @@ class TestSmallTalk:
     def test_small_talk_clears_previous_sources(self, ask, ai):
         ask("q1")
         ai.small_talk = 0.95
+        ai.reply = "천만에요!"
         assert ask("고마워").json()["sources"] == []
         ai.small_talk = 0.0
         ai.jev_calls.clear()
@@ -220,3 +221,50 @@ class TestClarificationWithoutDocuments:
         asked("연차요")
         # 표시를 다시 붙이지 않아 다음 말은 일반 질문으로 처리한다
         assert ai.search_calls[-1] == "연차요" and ai.reply_allowed[-1] is True
+
+
+class TestAlternateSearch:
+    NO_RESULT = {"chunks": [], "failed_sources": []}
+    FOUND = {"chunks": [chunk("leave", source="leave-policy")], "failed_sources": []}
+
+    def test_empty_search_retries_with_other_spelling(self, ask, ai, monkeypatch):
+        results = [self.NO_RESULT, self.FOUND]
+
+        async def search(query, filters=None, scope=None):
+            ai.search_calls.append(query)
+            return results.pop(0)
+
+        monkeypatch.setattr(graph, "search", search)
+        ai.rewrite = "leave policy"
+        body = ask("리브 팔러시가 뭐야?").json()
+        assert ai.search_calls == ["리브 팔러시가 뭐야?", "leave policy"]
+        assert [source["id"] for source in body["sources"]] == ["leave"]
+        assert "leave policy" in ai.llm_calls[0]["question"]
+
+    def test_no_other_spelling_does_not_search_again(self, ask, ai):
+        ai.search_result = self.NO_RESULT
+        assert ask("사내 주차 등록은?").json()["answer"] == graph.NO_EVIDENCE_ANSWER
+        assert len(ai.search_calls) == 1 and ai.reply_calls == ["사내 주차 등록은?"]
+
+    def test_rewrite_failure_replies_without_documents(self, ask, ai):
+        ai.search_result = self.NO_RESULT
+        ai.rewrite = AiUnavailableError("x")
+        assert ask("q").status_code == 200 and ai.reply_calls == ["q"]
+
+    def test_refused_answer_retries_once(self, ask, ai, monkeypatch):
+        answers = [f'{{"answer": "{graph.NO_EVIDENCE_ANSWER}"}}', "답변"]
+
+        async def generate(question, context, history):
+            ai.llm_calls.append({"question": question})
+            return answers.pop(0)
+
+        monkeypatch.setattr(graph, "generate_answer", generate)
+        ai.rewrite = "leave policy"
+        body = ask("리브 팔러시가 뭐야?").json()
+        assert body["answer"] == "답변"
+        assert len(ai.llm_calls) == 2 and len(ai.search_calls) == 2 and ai.rewrite_calls == ["리브 팔러시가 뭐야?"]
+
+    def test_small_talk_refusal_falls_through_to_search(self, ask, ai):
+        ai.small_talk = 0.99
+        body = ask("리브 팔러시가 뭐야?").json()
+        assert len(ai.search_calls) == 1 and body["answer"].startswith("답변")

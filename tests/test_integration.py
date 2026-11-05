@@ -120,8 +120,8 @@ def test_missing_embedding_uses_graph_only(client, counter, monkeypatch):
 def test_missing_embedding_and_no_graph_match_answers_no_result(client, counter, monkeypatch):
     monkeypatch.setenv("EMBEDDING_API_KEY", "")
     body = post(client, "관계없는 질문").json()
-    # 문서가 없어도 응대 모델을 한 번 호출하고, 문서 내용은 넘기지 않는다
-    assert body["sources"] == [] and body["failedSources"] == ["vector"] and counter["llm"] == 1
+    # 다른 표기를 만들고 응대 모델로 답한다. 문서 내용은 넘기지 않는다
+    assert body["sources"] == [] and body["failedSources"] == ["vector"] and counter["llm"] == 2
     assert counter["prompt"] == "관계없는 질문"
 
 

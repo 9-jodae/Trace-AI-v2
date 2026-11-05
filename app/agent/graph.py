@@ -19,9 +19,10 @@ from app.llm.client import (
     generate_answer,
     generate_reply_without_documents,
     is_clarification,
+    rewrite_search_query,
 )
 from app.retrieval.schemas import Chunk
-from app.retrieval.service import filter_accessible_context, search
+from app.retrieval.service import SearchResult, filter_accessible_context, search
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +35,15 @@ HISTORY_LIMIT = 6
 FOLLOW_UP_PATTERN = re.compile(r"^(그럼|그러면|그건|그게|그거|그것|그 |이건|이게|이거|이 경우|앞서|위 )")
 
 
+# TODO: 이름과 값은 서버 계약에서 확정 (docs199-Server#76)
+AnswerType = Literal["ANSWER", "NO_EVIDENCE", "CLARIFICATION", "SMALL_TALK"]
+
+
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     small_talk: bool
+    alternate_query: str | None
+    answer_type: AnswerType
     context: list[Chunk]
     filters: SearchFilters | None
     access_scope: AccessScope | None
@@ -68,11 +75,18 @@ def select_small_talk(state: AgentState) -> str:
     return "small_talk" if state["small_talk"] else "judge_context"
 
 
+def select_after_small_talk(state: AgentState) -> str:
+    return END if state["small_talk"] else "judge_context"
+
+
 async def small_talk(state: AgentState) -> dict:
+    reply = await _reply_without_documents(state)
+    # 응대 모델이 회사 질문으로 보고 거절하면 판단이 틀린 것이므로 문서 검색으로 넘긴다
+    if reply["answer_type"] == "NO_EVIDENCE":
+        return {"small_talk": False}
     # 쓰이지 않은 청크를 출처로 보여 주지 않는다. route 값은 서버 계약이 정해질 때까지 늘리지 않는다
     return {
-        "messages": [await _reply_without_documents(state)],
-        "evidence": [],
+        **reply,
         "context": [],
         "route": "SEARCH",
         "context_probability": None,
@@ -132,36 +146,81 @@ def _search_query(state: AgentState) -> str:
 
 async def retrieve(state: AgentState) -> dict:
     result = await search(_search_query(state), state.get("filters"), state.get("access_scope"))
-    return {"context": result["chunks"], "failed_sources": result["failed_sources"]}
+    update = {"context": result["chunks"], "failed_sources": result["failed_sources"]}
+    if result["chunks"]:
+        return update
+    alternate = await _alternate_search(state)
+    if alternate is None or not alternate[1]["chunks"]:
+        return update
+    query, found = alternate
+    return {"context": found["chunks"], "failed_sources": found["failed_sources"], "alternate_query": query}
 
 
-async def _reply_without_documents(state: AgentState) -> AIMessage:
+async def _reply_without_documents(state: AgentState) -> dict:
     follows = _follows_clarification(state)
     try:
         answer, clarification = await generate_reply_without_documents(state["messages"][-1].text, not follows)
     except AiUnavailableError as exc:
         # 문서가 없는 응대가 실패했다고 오류로 끝내지 않고 이전처럼 거절 문장으로 답한다
         logger.warning("Reply without documents failed: %s", exc)
-        return AIMessage(content=NO_EVIDENCE_ANSWER)
-    # 두 번 연달아 되묻지 않는다. 모델이 어기면 일반 답변으로 내보낸다
-    marked = clarification and not follows
-    return AIMessage(content=answer, additional_kwargs={CLARIFICATION_KEY: True} if marked else {})
+        answer, clarification = NO_EVIDENCE_ANSWER, False
+    # 두 번 연달아 되묻지 않는다. 문서가 없어 답할 수 없으므로 모델이 어기면 거절한다
+    if clarification and follows:
+        answer, clarification = NO_EVIDENCE_ANSWER, False
+    if clarification:
+        answer_type = "CLARIFICATION"
+    else:
+        answer_type = "NO_EVIDENCE" if answer == NO_EVIDENCE_ANSWER else "SMALL_TALK"
+    message = AIMessage(content=answer, additional_kwargs={CLARIFICATION_KEY: True} if clarification else {})
+    return {"messages": [message], "evidence": [], "answer_type": answer_type}
 
 
-async def generate(state: AgentState) -> dict:
-    if not state["context"]:
-        return {"messages": [await _reply_without_documents(state)], "evidence": []}
-    response = await generate_answer(state["messages"][-1].text, state["context"], _history(state))
-    answer, evidence, clarification = parse_answer(response, state["context"])
+async def _alternate_search(state: AgentState) -> tuple[str, SearchResult] | None:
+    # "리브 팔러시"처럼 표기만 다른 질문을 찾는다. 다른 표기가 없으면 다시 검색하지 않는다
+    try:
+        query = await rewrite_search_query(_search_query(state))
+        if query is None:
+            return None
+        return query, await search(query, state.get("filters"), state.get("access_scope"))
+    except AiUnavailableError as exc:
+        logger.warning("Alternate search failed: %s", exc)
+        return None
+
+
+async def _answer_with_documents(state: AgentState, context: list[Chunk], alternate_query: str | None) -> dict:
+    question = state["messages"][-1].text
+    if alternate_query:
+        question = f"{question}\n(같은 뜻의 다른 표기: {alternate_query})"
+    response = await generate_answer(question, context, _history(state))
+    answer, evidence, clarification = parse_answer(response, context)
     # 두 번 연달아 되묻지 않는다. 모델이 어기면 일반 답변으로 내보낸다
     clarification = clarification and not _follows_clarification(state)
     # 다음 턴의 대화 기록에는 JSON이 아니라 답변만 남긴다
     message = AIMessage(content=answer, additional_kwargs={CLARIFICATION_KEY: True} if clarification else {})
-    update = {"messages": [message], "evidence": evidence}
-    if clarification or answer == NO_EVIDENCE_ANSWER:
-        # 쓰이지 않은 청크를 출처로 보여 주거나 다음 턴에 재사용하지 않는다
-        update["context"] = []
-    return update
+    refused = answer == NO_EVIDENCE_ANSWER
+    answer_type = "CLARIFICATION" if clarification else "NO_EVIDENCE" if refused else "ANSWER"
+    # 쓰이지 않은 청크를 출처로 보여 주거나 다음 턴에 재사용하지 않는다
+    return {
+        "messages": [message],
+        "evidence": evidence,
+        "answer_type": answer_type,
+        "context": [] if clarification or refused else context,
+    }
+
+
+async def generate(state: AgentState) -> dict:
+    if not state["context"]:
+        return await _reply_without_documents(state)
+    alternate_query = state.get("alternate_query")
+    update = await _answer_with_documents(state, state["context"], alternate_query)
+    # 무관한 문서만 찾아 거절했으면 다른 표기로 한 번만 더 찾는다
+    if update["answer_type"] != "NO_EVIDENCE" or alternate_query or state["route"] != "SEARCH":
+        return update
+    alternate = await _alternate_search(state)
+    if alternate is None or not alternate[1]["chunks"]:
+        return update
+    query, result = alternate
+    return await _answer_with_documents(state, result["chunks"], query)
 
 
 def _timed(name: str, step: Callable[[AgentState], Awaitable[dict]]) -> Callable[[AgentState], Awaitable[dict]]:
@@ -185,7 +244,7 @@ def build_agent():
     graph.add_node("generate", _timed("generate", lambda state: generate(state)))
     graph.add_edge(START, "judge_small_talk")
     graph.add_conditional_edges("judge_small_talk", select_small_talk, ["small_talk", "judge_context"])
-    graph.add_edge("small_talk", END)
+    graph.add_conditional_edges("small_talk", select_after_small_talk, ["judge_context", END])
     graph.add_conditional_edges("judge_context", select_route, ["generate", "retrieve"])
     graph.add_edge("retrieve", "generate")
     graph.add_edge("generate", END)

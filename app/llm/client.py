@@ -60,12 +60,14 @@ SYSTEM_PROMPT = f"""사내 문서 검색 결과를 바탕으로 질문에 답한
 {{"answer": "답변",
  "evidence": [{{"chunk": 1, "quote": "원문 그대로의 문구"}}],
  "options": [{{"label": "선택지", "chunk": 1}}]}}"""
-# 검색 결과가 없을 때 쓴다. 문서가 없으므로 사실을 답하지 못하게 응대할 수 있는 말을 좁게 정한다
-NO_DOCUMENT_PROMPT = f"""사내 문서 도우미로 대화한다. 지금은 관련 문서를 찾지 못한 상태다.
-- 인사, 감사, 안부, 도우미 소개 요청에는 한국어로 1~2문장으로 자연스럽게 답한다.
+# 일상 대화와 검색 결과가 없을 때 쓴다. 문서가 없으므로 회사에 관한 사실은 답하지 못하게 한다
+NO_DOCUMENT_PROMPT = f"""사내 문서 도우미로 대화한다. 지금은 문서를 참고하지 않고 답한다.
+이 도우미는 사용자가 볼 수 있는 사내 문서를 검색해 근거와 함께 답한다.
+- 회사와 무관한 말에는 한국어로 짧고 자연스럽게 답한다. 인사, 일상 대화, 메뉴 추천 같은 추천 요청, 일반 상식이 해당한다.
+- 이 도우미의 기능을 물으면 위 설명을 바탕으로 답한다.
 - 사내 문서에 관한 질문 같지만 무엇을 묻는지 불분명하면
   "어떤 기간에 관한 질문인가요? 좀 더 자세히 말씀해 주세요."처럼 되묻고 자세히 말해 달라고 요청한다.
-- 그 밖의 모든 질문에는 정확히 '{NO_EVIDENCE_ANSWER}' 한 문장만 쓴다.
+- 회사 규정, 절차, 업무, 사내 정보를 묻는 질문에는 정확히 '{NO_EVIDENCE_ANSWER}' 한 문장만 쓴다.
 - 회사 정책, 수치, 담당 부서, 절차를 말하거나 추측하지 않는다.
 다음 형식의 JSON 객체 하나만 응답한다. clarification은 되물을 때만 true로 쓴다.
 {{"answer": "답변", "clarification": false}}"""
@@ -115,6 +117,21 @@ async def generate_answer(question: str, context: list[Chunk], history: list[Bas
         HumanMessage(content=build_prompt(question, context, not (history and is_clarification(history[-1])))),
     ]
     return await generate_structured_response(messages)
+
+
+REWRITE_PROMPT = """사내 문서 검색에 쓸 다른 표기의 검색어를 만든다. 질문에 답하지 않는다.
+- 한글로 적은 외국어는 원어로, 영어 단어는 한글로 바꾼다. 예: 리브 팔러시 -> leave policy
+- 질문에 없는 내용을 더하지 않는다. 검색어 한 줄만 쓴다.
+- 바꿀 표기가 없으면 NONE만 쓴다."""
+MAX_REWRITE_LENGTH = 200
+
+
+async def rewrite_search_query(question: str) -> str | None:
+    messages = [SystemMessage(content=REWRITE_PROMPT), HumanMessage(content=question)]
+    reply = await generate_structured_response(messages, config.chat_llm_model(), config.llm_model())
+    lines = reply.strip().splitlines()
+    query = lines[0].strip()[:MAX_REWRITE_LENGTH] if lines else ""
+    return None if not query or query == "NONE" or query == question.strip() else query
 
 
 class NoDocumentReply(NamedTuple):
