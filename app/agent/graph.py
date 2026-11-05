@@ -208,8 +208,9 @@ def select_after_small_talk(state: AgentState) -> str:
 
 async def small_talk(state: AgentState) -> dict:
     reply = await _reply_without_documents(state)
-    # 응대 모델이 회사 질문으로 보고 거절하면 판단이 틀린 것이므로 문서 검색으로 넘긴다
-    if reply["answer_type"] == "NO_EVIDENCE":
+    # 응대 모델이 회사 질문으로 보고 거절하거나, 무엇을 묻는지 몰라 되물으면 판단이 틀렸을 수 있으므로
+    # 문서 검색으로 넘긴다. "새결이 뭘까요?"처럼 문서에 나오는 이름을 잡담으로 본 경우가 있었다
+    if reply["answer_type"] in ("NO_EVIDENCE", "CLARIFICATION"):
         return {"small_talk": False}
     # 쓰이지 않은 청크를 출처로 보여 주지 않는다. route 값은 서버 계약이 정해질 때까지 늘리지 않는다
     return {
