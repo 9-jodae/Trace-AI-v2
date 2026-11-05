@@ -17,7 +17,6 @@ SCHEMA_STATEMENTS = (
     "CREATE CONSTRAINT entity_id IF NOT EXISTS FOR (e:Entity) REQUIRE e.entity_id IS UNIQUE",
     "CREATE CONSTRAINT relation_assertion_id IF NOT EXISTS FOR (r:RelationAssertion) REQUIRE r.assertion_id IS UNIQUE",
     "CREATE CONSTRAINT entity_alias_id IF NOT EXISTS FOR (a:EntityAlias) REQUIRE a.alias_id IS UNIQUE",
-    "CREATE CONSTRAINT topic_name IF NOT EXISTS FOR (t:Topic) REQUIRE t.name IS UNIQUE",
 )
 SEEDS_CYPHER = "MATCH (d:Document) RETURN d.document_id AS id, d.source AS source"
 DOCUMENT_CATALOG_CYPHER = "MATCH (d:Document) RETURN d.document_id AS document_id, d.source AS source"
@@ -122,22 +121,6 @@ MERGE (r)-[:SUPPORTED_BY]->(c)
 """
 
 
-DOCUMENT_TOPICS_CYPHER = """
-MATCH (d:Document)-[:HAS_TOPIC]->(t:Topic)
-RETURN d.document_id AS document_id, collect(t.name) AS topics
-"""
-TOPIC_CATALOG_CYPHER = "MATCH (t:Topic) RETURN t.name AS name ORDER BY name"
-REPLACE_TOPICS_CYPHER = """
-MATCH (d:Document {document_id: $document_id})
-OPTIONAL MATCH (d)-[old:HAS_TOPIC]->(:Topic)
-DELETE old
-WITH DISTINCT d
-UNWIND $topics AS topic
-MERGE (t:Topic {name: topic})
-MERGE (d)-[:HAS_TOPIC]->(t)
-"""
-
-
 def name_in_query(name: str, query: str) -> bool:
     normalized = normalize_name(name)
     if len(normalized) < MIN_NAME_LENGTH:
@@ -221,21 +204,6 @@ class Neo4jGraphStore:
         rows = await self._read(ENTITY_MENTION_SEARCH_CYPHER, {"entity_ids": entity_ids, "limit": limit})
         mention_ids = [row["id"] for row in rows]
         return list(dict.fromkeys([*evidence_ids, *mention_ids]))[:limit]
-
-    async def list_document_topics(self) -> dict[str, list[str]]:
-        rows = await self._read(DOCUMENT_TOPICS_CYPHER, {})
-        return {row["document_id"]: row["topics"] for row in rows}
-
-    async def list_topics(self) -> list[str]:
-        return [row["name"] for row in await self._read(TOPIC_CATALOG_CYPHER, {})]
-
-    async def replace_document_topics(self, document_id: str, topics: list[str]) -> None:
-        async def write(tx) -> None:
-            await (await tx.run(REPLACE_TOPICS_CYPHER, document_id=document_id, topics=topics)).consume()
-
-        await self.ensure_schema()
-        async with self._driver.session(database=self._database) as session:
-            await session.execute_write(write)
 
     async def list_document_catalog(self) -> list[dict[str, str]]:
         return await self._read(DOCUMENT_CATALOG_CYPHER, {})

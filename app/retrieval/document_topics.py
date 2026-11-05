@@ -38,7 +38,9 @@ def parse_topics(reply: str) -> list[str] | None:
         return None
     topics = [item.strip() for item in raw if isinstance(item, str)] if isinstance(raw, list) else []
     valid = [topic for topic in topics if 0 < len(topic) <= MAX_TOPIC_LENGTH]
-    return list(dict.fromkeys(valid))[:MAX_TOPICS]
+    # DB가 대소문자를 무시해 중복을 막으므로 같은 기준으로 거른다
+    unique = {topic.casefold(): topic for topic in reversed(valid)}
+    return list(reversed(unique.values()))[:MAX_TOPICS]
 
 
 async def extract_document_topics(document: DocumentInput, existing_topics: list[str]) -> list[str] | None:

@@ -49,24 +49,6 @@ class EvidenceQuote(CamelModel):
     char_end: int | None = None
 
 
-class TopicEdgeDetail(CamelModel):
-    topics: list[str]
-
-
-class TopicEdge(CamelModel):
-    # TODO: 형식은 서버 계약에서 확정 (docs199-Server#81)
-    id: str
-    source: str
-    target: str
-    type: Literal["TOPIC"] = "TOPIC"
-    label: str
-    detail: TopicEdgeDetail
-
-
-class TopicEdgesResponse(CamelModel):
-    edges: list[TopicEdge]
-
-
 class KeywordItem(CamelModel):
     # TODO: 형식은 서버 계약에서 확정 (docs199-Server#78)
     chunk_id: str

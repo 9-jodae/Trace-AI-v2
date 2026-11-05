@@ -6,39 +6,14 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, Request
 from langchain_core.messages import HumanMessage
 
-from app.agent.schemas import ChatRequest, ChatResponse, TopicEdge, TopicEdgeDetail, TopicEdgesResponse
+from app.agent.schemas import ChatRequest, ChatResponse
 from app.core import config
 from app.core.auth import require_internal_secret
-from app.core.errors import AiUnavailableError, describe_exception
-from app.retrieval.service import list_topic_edges
+from app.core.errors import AiUnavailableError
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"], dependencies=[Depends(require_internal_secret)])
-
-
-@router.get("/topic-edges")
-async def topic_edges() -> TopicEdgesResponse:
-    try:
-        edges = await list_topic_edges()
-    except AiUnavailableError:
-        raise
-    except Exception as exc:
-        # Spring은 이 응답이 실패해도 주제 간선만 빼고 그래프를 보여 준다
-        logger.error("Topic edges failed: %s", describe_exception(exc))
-        raise AiUnavailableError("주제 간선을 읽지 못했습니다.") from exc
-    return TopicEdgesResponse(
-        edges=[
-            TopicEdge(
-                id=edge["id"],
-                source=edge["source"],
-                target=edge["target"],
-                label=edge["label"],
-                detail=TopicEdgeDetail(topics=edge["topics"]),
-            )
-            for edge in edges
-        ]
-    )
 
 
 @router.post("/chat")

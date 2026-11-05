@@ -7,7 +7,6 @@ from typing_extensions import TypedDict
 from app.core import config
 from app.core.errors import AiUnavailableError, describe_exception
 from app.core.schemas import AccessScope, SearchFilters
-from app.retrieval.document_topics import shared_topic_edges
 from app.retrieval.embedding import embed_query
 from app.retrieval.fusion import rrf_fuse
 from app.retrieval.neo4j_store import Neo4jGraphStore
@@ -72,12 +71,6 @@ async def close_stores() -> None:
         await vector_store.close()
         await graph_store.close()
     _real_stores.cache_clear()
-
-
-async def list_topic_edges() -> list[dict]:
-    """주제 간선을 만든다. 권한은 보지 않으므로 호출한 Spring이 걸러야 한다."""
-    _, graph_store = get_stores()
-    return shared_topic_edges(await graph_store.list_document_topics())
 
 
 async def filter_accessible_context(chunks: list[Chunk], scope: AccessScope | None = None) -> list[Chunk]:
