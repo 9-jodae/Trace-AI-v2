@@ -25,7 +25,7 @@ python3 -m venv .venv
 | 항목 | 값 | 비고 |
 | --- | --- | --- |
 | `APP_ENV` | `production` | `local`이 아니면 운영 모드 |
-| `HOST` | Compose 네트워크의 게이트웨이 IP | **비우면 `0.0.0.0`으로 열리므로 반드시 지정** |
+| `HOST` | Docker 기본 브리지의 게이트웨이 IP | **비우면 `0.0.0.0`으로 열리므로 반드시 지정** |
 | `PORT` | `8000` | |
 | `INTERNAL_SECRET` | Spring과 같은 값 | 없으면 시작 실패 |
 | `DATABASE_URL` | `postgresql://ai_app:비밀번호@localhost:5432/docs199` | |
@@ -37,11 +37,13 @@ python3 -m venv .venv
 
 `USE_SAMPLE_DATA`와 `ACCESS_*`, `EMBEDDING_PROXY_URL`은 넣지 않습니다. 운영 모드에서 샘플 설정은 시작 실패이고, 나머지는 무시합니다.
 
-게이트웨이 IP는 다음처럼 확인합니다. 네트워크 이름은 `docker network ls`로 찾습니다.
+게이트웨이 IP는 다음처럼 확인합니다.
 
 ```bash
-docker network inspect <compose 네트워크> --format '{{(index .IPAM.Config 0).Gateway}}'
+docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}'
 ```
+
+Spring을 연결하기 전 시험에는 `HOST=127.0.0.1`을 써서 서버 안에서만 접속하게 합니다.
 
 ## 실행
 
@@ -81,13 +83,16 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST "http://<HOST 값>:8000/api/v1/
 
 ## Spring 연결
 
-백엔드와 함께 진행합니다. `compose.prod.yaml`의 `app` 서비스에 다음이 필요합니다.
+`docs199-Server`의 `docs/ai-integration-setup.md` "AI 서버 연결" 절을 따릅니다. Spring 컨테이너는 `http://host.docker.internal:8000`으로 호스트의 AI 서버에 접속합니다. 이 주소가 위의 브리지 게이트웨이를 가리키는지, 외부 인터페이스에서 8000 포트가 열리지 않는지 확인합니다.
 
-- `AI_MODE: http`. 지금은 `mock`으로 고정되어 있습니다.
-- AI 서버 주소 설정. `AI_BASE_URL`을 `http://<게이트웨이 IP>:8000`으로 둡니다.
-- `INTERNAL_SECRET`을 AI 서버와 같은 값으로 설정합니다.
+서버의 `docs199-Server` 폴더에서 전환하고 되돌립니다. 스크립트가 `.env`의 `AI_MODE`, `AI_BASE_URL`을 바꾸고 잠금 배포까지 실행합니다.
 
-서버 계약은 AI 서버를 같은 Docker 네트워크에 두는 구조로 적혀 있으므로, venv로 실행하는 동안의 차이를 백엔드와 공유합니다.
+```bash
+scripts/switch-ai-mode.sh http http://host.docker.internal:8000
+scripts/switch-ai-mode.sh mock
+```
+
+`INTERNAL_SECRET`은 Spring과 AI 서버가 같은 값이어야 합니다.
 
 ## 갱신과 중단
 
