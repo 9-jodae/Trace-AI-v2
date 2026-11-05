@@ -231,6 +231,11 @@ class TestAnswerRetry:
         assert len(calls) == 2
 
 
+def test_clarification_prompt_explains_differences():
+    assert "무엇이 다른지" in SYSTEM_PROMPT and "내용이 같은 기록이면 되묻지 말고" in SYSTEM_PROMPT
+    assert "에 관한 질문인가요, B에" not in SYSTEM_PROMPT
+
+
 def test_prompts_cover_counts_tables_and_quotes():
     assert "전체 수는 알 수 없고" in SYSTEM_PROMPT and '\\"' in SYSTEM_PROMPT
     assert "직접 물을 때만" in SYSTEM_PROMPT and "언급하지 않는다" in SYSTEM_PROMPT
