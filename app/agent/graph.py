@@ -23,8 +23,14 @@ from app.llm.client import (
     is_clarification,
     rewrite_search_query,
 )
-from app.retrieval.schemas import Chunk
-from app.retrieval.service import SearchResult, filter_accessible_context, search
+from app.retrieval.schemas import Chunk, RegisteredConflict
+from app.retrieval.service import (
+    KnownConflict,
+    SearchResult,
+    fetch_known_conflicts,
+    filter_accessible_context,
+    search,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +75,8 @@ class AgentState(TypedDict):
     context: list[Chunk]
     filters: SearchFilters | None
     access_scope: AccessScope | None
+    known_conflicts: list[KnownConflict]
+    registered_conflicts: list[RegisteredConflict]
     evidence: list[Evidence]
     keywords: list[Keyword]
     route: Literal["CONTEXT", "SEARCH"]
@@ -198,6 +206,18 @@ def _search_query(state: AgentState) -> str:
 
 
 async def retrieve(state: AgentState) -> dict:
+    update = await _search_documents(state)
+    known = state.get("known_conflicts")
+    if not known or not _is_conflict_scan(state["messages"][-1].text):
+        return update
+    found = await fetch_known_conflicts(known, state.get("filters"), state.get("access_scope"))
+    # 등록 충돌의 근거를 앞에 두고, 같은 청크는 한 번만 넣는다
+    present = {chunk["id"] for chunk in found["chunks"]}
+    others = [chunk for chunk in update["context"] if chunk["id"] not in present]
+    return {**update, "context": [*found["chunks"], *others], "registered_conflicts": found["conflicts"]}
+
+
+async def _search_documents(state: AgentState) -> dict:
     result = await search(_search_query(state), state.get("filters"), state.get("access_scope"))
     update = {"context": result["chunks"], "failed_sources": result["failed_sources"]}
     if result["chunks"]:
@@ -248,6 +268,10 @@ async def _answer_with_documents(state: AgentState, context: list[Chunk], altern
     extra = {"edit_request": True} if edit_request else {}
     if _is_conflict_scan(question):
         extra["conflict_scan"] = True
+    registered = state.get("registered_conflicts")
+    if registered:
+        extra["registered_conflicts"] = registered
+        extra["registered_partial"] = len(registered) < len(state.get("known_conflicts") or [])
     response = await generate_answer(question, context, _history(state), **extra)
     try:
         answer, evidence, clarification, keywords = parse_answer(response, context)
