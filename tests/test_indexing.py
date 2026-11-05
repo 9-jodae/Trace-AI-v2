@@ -19,14 +19,19 @@ DOCUMENT = {
 @pytest.fixture
 def setup(monkeypatch):
     state = {"embedded": [], "vector": [], "graph": [], "references": [], "closed": 0}
+    state.update(current=[True], stored=True)
 
     async def embed(texts):
         state["embedded"].append(texts)
         return [[0.1] for _ in texts]
 
     class Vector:
+        async def is_current_version(self, version_id):
+            return state["current"][0]
+
         async def replace_version(self, version_id, chunks, embeddings):
             state["vector"].append((version_id, chunks, embeddings))
+            return state["stored"]
 
     class Graph:
         async def replace_version(self, document_id, source, names, chunks, mentions):
@@ -135,4 +140,25 @@ def test_index_file_links_references_after_all_documents(setup, tmp_path):
     links = dict(setup["references"])
     assert [link["target_document_id"] for link in links["a"]] == ["b"]
     assert links["b"] == [] and setup["closed"] == 1
+
+
+class TestStaleVersion:
+    def test_stale_document_skips_embedding_and_stores(self, setup, caplog):
+        setup["current"][0] = False
+        assert asyncio.run(indexing.index_document(DOCUMENT)) == []
+        assert setup["embedded"] == [] and setup["vector"] == [] and setup["graph"] == []
+        assert "not the current version" in caplog.text and DOC_TEXT not in caplog.text
+
+    def test_version_changed_during_embedding_keeps_graph(self, setup, caplog):
+        setup["stored"] = False
+        assert asyncio.run(indexing.index_document(DOCUMENT)) == []
+        assert len(setup["vector"]) == 1 and setup["graph"] == []
+        assert "version changed" in caplog.text
+
+    def test_stale_document_gets_no_references(self, setup, tmp_path):
+        setup["current"][0] = False
+        path = tmp_path / "docs.json"
+        path.write_text(json.dumps([{"doc_id": "a", "title": "t", "text": "《u》"}]), encoding="utf-8")
+        assert asyncio.run(indexing.index_file(path)) == 0
+        assert setup["references"] == []
 

@@ -7,7 +7,7 @@ from app.retrieval.schemas import Chunk
 CONNECT_TIMEOUT_SECONDS = 5
 QUERY_TIMEOUT_SECONDS = 5
 
-# 그래프에는 권한과 본문을 복사하지 않는다. 찾은 청크 ID는 PostgreSQL 권한 함수를 거쳐 본문을 읽는다
+# 그래프에는 권한과 본문을 복사하지 않고 위치만 둔다. 찾은 청크 ID는 PostgreSQL 권한 함수를 거쳐 본문을 읽는다
 SCHEMA_STATEMENTS = (
     "CREATE CONSTRAINT document_id IF NOT EXISTS FOR (d:Document) REQUIRE d.document_id IS UNIQUE",
     "CREATE CONSTRAINT chunk_id IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE",
@@ -65,15 +65,14 @@ UNWIND $mentions AS item
 MATCH (c:Chunk {id: item.chunk_id})
 MERGE (e:Entity {entity_id: item.entity_id})
 SET e.entity_type = item.entity_type, e.name = item.name, e.normalized_name = item.normalized_name
-CREATE (c)-[:MENTIONS {quote: item.quote, char_start: item.char_start, char_end: item.char_end}]->(e)
+CREATE (c)-[:MENTIONS {char_start: item.char_start, char_end: item.char_end}]->(e)
 """
 DELETE_REFERENCES_CYPHER = "MATCH (:Document {document_id: $document_id})-[r:REFERENCES]->() DELETE r"
 CREATE_REFERENCES_CYPHER = """
 UNWIND $links AS item
 MATCH (source:Document {document_id: item.source_document_id})
 MATCH (target:Document {document_id: item.target_document_id})
-CREATE (source)-[:REFERENCES {chunk_id: item.chunk_id, quote: item.quote,
-                              char_start: item.char_start, char_end: item.char_end}]->(target)
+CREATE (source)-[:REFERENCES {chunk_id: item.chunk_id, char_start: item.char_start, char_end: item.char_end}]->(target)
 """
 
 

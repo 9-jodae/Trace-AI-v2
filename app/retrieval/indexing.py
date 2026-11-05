@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import logging
 from pathlib import Path
 
 from app.retrieval.chunking import chunk_document
@@ -9,6 +10,8 @@ from app.retrieval.entities import extract_mentions
 from app.retrieval.relations import document_names, resolve_references
 from app.retrieval.schemas import Chunk, DocumentInput
 from app.retrieval.service import close_stores, get_real_stores
+
+logger = logging.getLogger(__name__)
 
 
 def load_documents(path: Path) -> list[DocumentInput]:
@@ -29,9 +32,16 @@ async def index_document(document: DocumentInput, extract_entities: bool = False
     chunks = chunk_document(document["document_id"], document["version_id"], document["text"], document["source"])
     if not chunks:
         return []
-    embeddings = await embed_documents([chunk["text"] for chunk in chunks])
     vector_store, graph_store = get_real_stores()
-    await vector_store.replace_version(document["version_id"], chunks, embeddings)
+    # 구버전 작업이면 임베딩 비용을 쓰지 않는다
+    if not await vector_store.is_current_version(document["version_id"]):
+        logger.warning("Indexing skipped: not the current version")
+        return []
+    embeddings = await embed_documents([chunk["text"] for chunk in chunks])
+    # 그래프는 문서의 청크를 통째로 바꾸므로 현재 버전이 저장된 경우에만 진행한다
+    if not await vector_store.replace_version(document["version_id"], chunks, embeddings):
+        logger.warning("Indexing skipped: version changed while embedding")
+        return []
     # 본문이 LLM으로 나가므로 명시했을 때만 추출한다
     mentions = await extract_mentions(chunks) if extract_entities else []
     await graph_store.replace_version(

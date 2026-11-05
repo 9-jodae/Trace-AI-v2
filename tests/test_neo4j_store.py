@@ -117,6 +117,11 @@ CHUNK = {"id": "a", "version_id": "ver", "char_start": 0, "char_end": 2, "text":
 MENTION = {"chunk_id": "a", "entity_id": "e"}
 
 
+def test_relations_store_positions_not_quotes():
+    assert "quote" not in neo4j_store.CREATE_MENTIONS_CYPHER
+    assert "quote" not in neo4j_store.CREATE_REFERENCES_CYPHER
+
+
 class TestReplaceVersion:
     def replace(self, driver, mentions=()):
         asyncio.run(Neo4jGraphStore(driver).replace_version("doc", "규정", ["규정"], [CHUNK], list(mentions)))
