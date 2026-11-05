@@ -50,6 +50,19 @@ class TestConfig:
         monkeypatch.setenv("VECTOR_MAX_COSINE_DISTANCE", "0.42")
         assert config.vector_max_cosine_distance() == 0.42
 
+    @pytest.mark.parametrize("env", ["local", "production"])
+    def test_invalid_vector_distance_cutoff_stops_startup(self, monkeypatch, env):
+        monkeypatch.setenv("APP_ENV", env)
+        monkeypatch.setenv("INTERNAL_SECRET", "fake-secret")
+        monkeypatch.setenv("USE_SAMPLE_DATA", "")
+        monkeypatch.setenv("VECTOR_MAX_COSINE_DISTANCE", "invalid")
+        with pytest.raises(ValueError):
+            config.validate_startup()
+
+    def test_blank_vector_distance_cutoff_uses_default(self, monkeypatch):
+        monkeypatch.setenv("VECTOR_MAX_COSINE_DISTANCE", "")
+        assert config.vector_max_cosine_distance() == config.DEFAULT_VECTOR_MAX_COSINE_DISTANCE
+
     @pytest.mark.parametrize("value", ["-0.1", "2.1", "invalid"])
     def test_vector_distance_cutoff_rejects_invalid_values(self, monkeypatch, value):
         monkeypatch.setenv("VECTOR_MAX_COSINE_DISTANCE", value)

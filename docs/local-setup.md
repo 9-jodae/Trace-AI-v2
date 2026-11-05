@@ -19,7 +19,7 @@
 
 샘플 데이터를 켜지 않으면 `DATABASE_URL`(pgvector)이 필요합니다. 없으면 검색 경로는 503을 반환하며, 샘플로 대체하지 않습니다. 그래프 검색은 선택이라 `NEO4J_URI`를 비우면 벡터 검색만 씁니다. `NEO4J_URI`를 넣으면 `NEO4J_PASSWORD`도 필요합니다.
 
-벡터 검색은 pgvector cosine distance가 `VECTOR_MAX_COSINE_DISTANCE` 이하인 청크만 반환합니다. 기본값은 `0.55`(cosine similarity 0.45 이상)이며, 평가 데이터에 따라 조정할 수 있습니다. 값은 0~2 범위여야 합니다.
+벡터 검색은 pgvector cosine distance가 `VECTOR_MAX_COSINE_DISTANCE` 이하인 청크만 반환합니다. 기본값은 `0.55`(cosine similarity 0.45 이상)이며, 평가 데이터에 따라 조정할 수 있습니다. 값은 0~2 범위여야 하고, 잘못된 값이면 서버가 시작되지 않습니다.
 
 권한은 서버의 `accessible_chunks`와 `filter_accessible_chunk_ids`로 판단합니다. 그래프 검색 결과와 재사용할 이전 근거도 `filter_accessible_chunk_ids`를 거치므로, PostgreSQL이 멈추면 그래프 결과도 내보내지 않습니다.
 

@@ -68,6 +68,8 @@ def neo4j_database() -> str | None:
 
 
 def validate_startup() -> None:
+    # 잘못된 값이면 질문마다 벡터 검색이 실패하므로 시작할 때 막는다
+    vector_max_cosine_distance()
     if not is_production():
         return
     if not internal_secret():
