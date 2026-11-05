@@ -5,6 +5,7 @@ import httpx
 
 from app.core import config
 from app.core.errors import describe_exception
+from app.ingest.conflicts import is_conflict_resolved
 from app.ingest.extraction import UnsupportedDocumentError, extract_text
 from app.ingest.schemas import IngestRequest
 from app.ingest.storage import read_object
@@ -22,11 +23,15 @@ class IngestFailure(Exception):
     """콜백으로 보내도 되는 고정 문구만 담는다. 예외 원문이나 본문은 넣지 않는다."""
 
 
-async def send_result(job_id: str, status: str, error_message: str | None = None) -> None:
+async def send_result(
+    job_id: str, status: str, error_message: str | None = None, conflict_results: list[dict] | None = None
+) -> None:
     # 콜백이 끝내 실패하면 작업은 Spring에서 PENDING이나 PROCESSING으로 남고, Spring 복구 작업이 다시 제출한다
     url = f"{config.spring_internal_url()}/api/internal/ingestion-jobs/{job_id}/result"
     headers = {"X-Internal-Secret": config.internal_secret() or ""}
     body = {"status": status, "errorMessage": error_message}
+    if conflict_results:
+        body["conflictResults"] = conflict_results
     for attempt in range(1, CALLBACK_ATTEMPTS + 1):
         try:
             async with httpx.AsyncClient(timeout=CALLBACK_TIMEOUT_SECONDS) as client:
@@ -39,14 +44,26 @@ async def send_result(job_id: str, status: str, error_message: str | None = None
                 await asyncio.sleep(CALLBACK_RETRY_SECONDS)
 
 
-async def _index(request: IngestRequest) -> int:
+async def _recheck_conflicts(request: IngestRequest, vector_store, info: dict, text: str) -> list[dict]:
+    # 재적재가 끝난 새 본문을 상대 문서와 비교한다. 해소 여부만 돌려주고 문서 내용은 콜백에 넣지 않는다
+    results = []
+    for conflict in request.conflicts:
+        other = await vector_store.current_document_text(str(conflict.other_document_id))
+        resolved = other is not None and await is_conflict_resolved(
+            conflict.item, info["title"], text, other[0], other[1]
+        )
+        results.append({"relationId": str(conflict.relation_id), "resolved": resolved})
+    return results
+
+
+async def _index(request: IngestRequest) -> list[dict]:
     vector_store, _ = get_real_stores()
     version_id = str(request.version_id)
     info = await vector_store.current_version_document(version_id)
     if info is None:
         # 그사이 새 버전이 저장됐거나 삭제됐다. 처리할 것이 없으므로 실패가 아니다
         logger.info("Ingest skipped: not the current version")
-        return 0
+        return []
     try:
         data = await read_object(request.storage_key)
     except Exception as exc:
@@ -65,14 +82,17 @@ async def _index(request: IngestRequest) -> int:
         {"document_id": info["document_id"], "version_id": version_id, "text": text, "source": info["title"]},
         reuse_embeddings=True,
     )
-    return len(chunks)
+    # 구버전이 되어 적재하지 않았으면 비교하지 않는다. 경고는 유지된다
+    if not chunks:
+        return []
+    return await _recheck_conflicts(request, vector_store, info, text)
 
 
 async def process_ingest(request: IngestRequest) -> None:
     job_id = str(request.job_id)
     await send_result(job_id, "PROCESSING")
     try:
-        count = await _index(request)
+        conflict_results = await _index(request)
     except IngestFailure as exc:
         logger.warning("Ingest failed: job=%s", job_id)
         await send_result(job_id, "FAILED", str(exc))
@@ -80,5 +100,5 @@ async def process_ingest(request: IngestRequest) -> None:
         logger.error("Ingest failed: job=%s %s", job_id, describe_exception(exc))
         await send_result(job_id, "FAILED", "문서를 처리하지 못했습니다.")
     else:
-        logger.info("Ingest finished: job=%s chunks=%d", job_id, count)
-        await send_result(job_id, "DONE")
+        logger.info("Ingest finished: job=%s conflicts=%d", job_id, len(conflict_results))
+        await send_result(job_id, "DONE", conflict_results=conflict_results)

@@ -121,6 +121,15 @@ JOIN document_versions dv ON dv.id = c.document_version_id
 WHERE dv.document_id = %s::uuid AND c.content_hash = ANY(%s) AND c.embedding IS NOT NULL
 ORDER BY c.content_hash, dv.version_number DESC
 """
+# 충돌 재확인에 쓴다. 현재 버전의 청크만 읽는다. 호출자 권한이 아니라 적재 작업 자체의 조회다
+CURRENT_DOCUMENT_TEXT_SQL = """
+SELECT d.title, c.content
+FROM documents d
+JOIN document_versions dv ON dv.document_id = d.id AND dv.version_number = d.current_version
+JOIN chunks c ON c.document_version_id = dv.id
+WHERE d.id = %s::uuid AND d.deleted_at IS NULL
+ORDER BY c.chunk_index
+"""
 REPLACE_TOPICS_SQL = "SELECT replace_document_topics(%s::uuid, %s::text[])"
 INSERT_CHUNK_SQL = """
 INSERT INTO chunks (id, document_version_id, chunk_index, content, char_start, char_end, content_hash, embedding)
@@ -151,6 +160,8 @@ class VectorStore(Protocol):
     async def current_version_document(self, version_id: str) -> dict | None: ...
 
     async def embeddings_by_hash(self, document_id: str, hashes: list[str]) -> dict[str, list[float]]: ...
+
+    async def current_document_text(self, document_id: str) -> tuple[str, str] | None: ...
 
     async def replace_document_topics(self, version_id: str, topics: list[str]) -> None: ...
 
@@ -345,6 +356,10 @@ class PostgresVectorStore:
     async def current_version_document(self, version_id: str) -> dict | None:
         rows = await self._read(CURRENT_VERSION_DOCUMENT_SQL, (version_id,))
         return rows[0] if rows else None
+
+    async def current_document_text(self, document_id: str) -> tuple[str, str] | None:
+        rows = await self._read(CURRENT_DOCUMENT_TEXT_SQL, (document_id,))
+        return (rows[0]["title"], "\n".join(row["content"] for row in rows)) if rows else None
 
     async def embeddings_by_hash(self, document_id: str, hashes: list[str]) -> dict[str, list[float]]:
         rows = await self._read(EMBEDDINGS_BY_HASH_SQL, (document_id, hashes))
