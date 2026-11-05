@@ -1,6 +1,7 @@
-from typing import NamedTuple
+from datetime import date
+from typing import Annotated, NamedTuple
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 
@@ -22,3 +23,16 @@ class AccessScope(NamedTuple):
     position: str | None
     clearance: str | None
     is_admin: bool
+
+
+FilterValues = Annotated[list[str], Field(min_length=1)]
+
+
+class SearchFilters(CamelModel):
+    """Spring이 검증해 넘기는 질문 검색 필터. 배열 안은 OR, 필드 사이는 AND다."""
+
+    extensions: FilterValues | None = None
+    document_types: FilterValues | None = None
+    source_kinds: FilterValues | None = None
+    authored_from: date | None = None
+    authored_to: date | None = None

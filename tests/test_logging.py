@@ -66,10 +66,10 @@ def test_jev_failure_log_has_no_exception_text(ask, ai, caplog):
 
 def test_search_failure_log_has_no_exception_text(monkeypatch, caplog):
     class Failing:
-        async def search(self, value, limit, scope):
+        async def search(self, value, limit, scope, filters=None):
             raise RuntimeError(SECRET)
 
-        async def filter_accessible(self, chunk_ids, scope):
+        async def filter_accessible(self, chunk_ids, scope, filters=None):
             return set()
 
     class Empty:

@@ -1,9 +1,10 @@
 import asyncio
+from datetime import date
 
 import pytest
 from conftest import chunk
 
-from app.core.schemas import AccessScope
+from app.core.schemas import AccessScope, SearchFilters
 from app.retrieval import stores
 
 
@@ -156,10 +157,35 @@ class TestPostgresVectorStore:
         assert result == [chunk("a")]
         sql, params = connection.executed[0]
         assert "<=>" in sql and "LIMIT" in sql and sql.lstrip().startswith("SELECT")
-        assert params == ("dept", "STAFF", "INTERNAL", False, "[0.5,1.0]", 3)
+        assert params == ("dept", "STAFF", "INTERNAL", False, None, None, None, None, None, "[0.5,1.0]", 3)
         assert connect.url == "postgresql://db"
         assert connect.kwargs["connect_timeout"] == stores.CONNECT_TIMEOUT_SECONDS
         assert connect.kwargs["options"] == f"-c statement_timeout={stores.SEARCH_STATEMENT_TIMEOUT_MS}"
+
+    def test_search_passes_filters_in_function_order(self, connect):
+        connection = FakeConnection()
+        connect(connection)
+        filters = SearchFilters(
+            extensions=["pdf"],
+            document_types=["REPORT"],
+            source_kinds=["LOCAL"],
+            authored_from=date(2026, 1, 1),
+            authored_to=date(2026, 12, 31),
+        )
+        asyncio.run(stores.PostgresVectorStore("x").search([1.0], 2, SCOPE, filters))
+        assert connection.executed[0][1] == (
+            *SCOPE, ["pdf"], ["REPORT"], ["LOCAL"], date(2026, 1, 1), date(2026, 12, 31), "[1.0]", 2,
+        )
+
+    def test_filter_accessible_with_filters_uses_filtered_function(self, connect):
+        connection = FakeConnection(rows=[{"id": "a"}])
+        connect(connection)
+        filters = SearchFilters(extensions=["pdf"])
+        result = asyncio.run(stores.PostgresVectorStore("x").filter_accessible(["a", "b"], SCOPE, filters))
+        assert result == {"a"}
+        sql, params = connection.executed[0]
+        assert "FROM accessible_chunks(" in sql and "ANY(%s::uuid[])" in sql
+        assert params == (*SCOPE, ["pdf"], None, None, None, None, ["a", "b"])
 
     def test_no_scope_returns_nothing_without_connecting(self):
         assert asyncio.run(stores.PostgresVectorStore("x").search([1.0], 1, None)) == []

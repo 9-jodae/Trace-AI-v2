@@ -73,8 +73,9 @@ class FakeAi:
     async def filter_context(self, chunks):
         return chunks
 
-    async def search(self, query):
+    async def search(self, query, filters=None):
         self.search_calls.append(query)
+        self.search_filters = filters
         if isinstance(self.search_result, Exception):
             raise self.search_result
         return self.search_result

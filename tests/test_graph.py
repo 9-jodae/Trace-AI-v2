@@ -3,6 +3,7 @@ from langchain_core.messages import HumanMessage
 
 from app.agent import graph
 from app.agent.graph import CONTEXT_REUSE_THRESHOLD, judge_context, select_route
+from app.core.schemas import SearchFilters
 
 CONTEXT = [{"id": "doc-1", "text": "본문", "source": "문서"}]
 
@@ -123,3 +124,13 @@ class TestContextRevalidation:
         assert self.sent == []
         assert decision["route"] == "SEARCH" and decision["context"] == []
         assert "RuntimeError" in decision["fallback_reason"]
+
+
+@pytest.mark.anyio
+async def test_filters_skip_context_reuse_without_jev(monkeypatch: pytest.MonkeyPatch):
+    async def forbidden(*_args) -> float:
+        raise AssertionError("JEV를 호출하면 안 됩니다")
+
+    monkeypatch.setattr(graph, "can_answer_probability", forbidden)
+    decision = await judge_context({**_state(CONTEXT), "filters": SearchFilters(extensions=["pdf"])})
+    assert decision["route"] == "SEARCH" and decision["fallback_reason"] is None

@@ -6,6 +6,7 @@ from typing_extensions import TypedDict
 
 from app.core import config
 from app.core.errors import AiUnavailableError, describe_exception
+from app.core.schemas import SearchFilters
 from app.retrieval.embedding import embed_query
 from app.retrieval.fusion import rrf_fuse
 from app.retrieval.neo4j_store import Neo4jGraphStore
@@ -73,7 +74,7 @@ async def filter_accessible_context(chunks: list[Chunk]) -> list[Chunk]:
     return [chunk for chunk in chunks if chunk["id"] in accessible]
 
 
-async def search(query: str) -> SearchResult:
+async def search(query: str, filters: SearchFilters | None = None) -> SearchResult:
     # 한 DB가 실패해도 나머지 결과로 답변하고, 모두 실패하면 이전 컨텍스트를 덮어쓰지 않도록 중단한다
     vector_store, graph_store = get_stores()
     scope = config.access_scope()
@@ -83,12 +84,12 @@ async def search(query: str) -> SearchResult:
         return {"chunks": [], "failed_sources": []}
 
     async def search_vector() -> list[Chunk]:
-        return await vector_store.search(await embed_query(query), SOURCE_LIMIT, scope)
+        return await vector_store.search(await embed_query(query), SOURCE_LIMIT, scope, filters)
 
     async def search_graph() -> list[Chunk]:
         # 권한을 확인하지 못하면 그래프 결과도 내보내지 않도록 실패로 처리한다
         candidates = await graph_store.search(query, GRAPH_CANDIDATE_LIMIT)
-        accessible = await vector_store.filter_accessible([chunk["id"] for chunk in candidates], scope)
+        accessible = await vector_store.filter_accessible([chunk["id"] for chunk in candidates], scope, filters)
         return [chunk for chunk in candidates if chunk["id"] in accessible][:SOURCE_LIMIT]
 
     names = ["vector", "graph"]

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 import main
 from app.core import config
 from app.core.errors import AiUnavailableError
-from app.core.schemas import AccessScope
+from app.core.schemas import AccessScope, SearchFilters
 from app.retrieval import service
 
 SCOPE = AccessScope("dept", "STAFF", "INTERNAL", False)
@@ -28,8 +28,8 @@ class FakeStore:
             raise self.error
         return self.result
 
-    async def filter_accessible(self, chunk_ids, scope):
-        self.filter_calls.append((chunk_ids, scope))
+    async def filter_accessible(self, chunk_ids, scope, filters=None):
+        self.filter_calls.append((chunk_ids, scope, filters))
         if self.filter_error:
             raise self.filter_error
         return set(chunk_ids) if self.accessible is None else self.accessible
@@ -52,7 +52,7 @@ def test_queries_both_stores(stores):
     vector, graph = FakeStore([chunk("a")]), FakeStore([chunk("b")])
     stores(vector, graph)
     asyncio.run(service.search("질문"))
-    assert vector.calls == [([0.1, 0.2], service.SOURCE_LIMIT, SCOPE)]
+    assert vector.calls == [([0.1, 0.2], service.SOURCE_LIMIT, SCOPE, None)]
     assert graph.calls == [("질문", service.GRAPH_CANDIDATE_LIMIT)]
 
 
@@ -207,7 +207,15 @@ class TestGraphPermissionFilter:
         stores(vector, graph)
         result = asyncio.run(service.search("질문"))
         assert [c["id"] for c in result["chunks"]] == ["b"]
-        assert vector.filter_calls == [(["secret", "b"], SCOPE)]
+        assert vector.filter_calls == [(["secret", "b"], SCOPE, None)]
+
+    def test_filters_reach_vector_and_graph_check(self, stores):
+        vector = FakeStore(accessible={"b"})
+        stores(vector, FakeStore([chunk("x"), chunk("b")]))
+        filters = SearchFilters(extensions=["pdf"])
+        asyncio.run(service.search("질문", filters))
+        assert vector.calls[0][3] is filters
+        assert vector.filter_calls == [(["x", "b"], SCOPE, filters)]
 
     def test_filter_failure_drops_graph_results(self, stores):
         stores(FakeStore([chunk("a")], filter_error=RuntimeError("db")), FakeStore([chunk("secret")]))
@@ -231,7 +239,7 @@ class TestFilterAccessibleContext:
         monkeypatch.setattr(service.config, "access_scope", lambda: SCOPE)
         chunks = [chunk("a"), chunk("b"), chunk("c")]
         assert [c["id"] for c in asyncio.run(service.filter_accessible_context(chunks))] == ["a", "c"]
-        assert vector.filter_calls == [(["a", "b", "c"], SCOPE)]
+        assert vector.filter_calls == [(["a", "b", "c"], SCOPE, None)]
 
 
 class TestPermissionFailsClosed:

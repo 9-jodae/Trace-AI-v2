@@ -172,3 +172,38 @@ class TestEvidence:
     def test_no_result_has_no_evidence(self, ask, ai):
         ai.search_result = {"chunks": [], "failed_sources": []}
         assert ask("q").json()["evidence"] == []
+
+
+class TestFilters:
+    BODY = {
+        "extensions": ["pdf", "md"],
+        "documentTypes": ["REPORT"],
+        "sourceKinds": ["LOCAL"],
+        "authoredFrom": "2026-01-01",
+        "authoredTo": "2026-12-31",
+    }
+
+    def test_camel_case_filters_reach_search(self, client, ai):
+        response = client.post(URL, json={"message": "q", "filters": self.BODY})
+        assert response.status_code == 200
+        filters = ai.search_filters
+        assert filters.extensions == ["pdf", "md"] and filters.document_types == ["REPORT"]
+        assert filters.source_kinds == ["LOCAL"] and filters.authored_to.isoformat() == "2026-12-31"
+
+    def test_no_filters_is_none(self, client, ai):
+        client.post(URL, json={"message": "q"})
+        assert ai.search_filters is None
+
+    def test_null_field_turns_filter_off(self, client, ai):
+        client.post(URL, json={"message": "q", "filters": {"extensions": None, "sourceKinds": ["LOCAL"]}})
+        assert ai.search_filters.extensions is None and ai.search_filters.source_kinds == ["LOCAL"]
+
+    @pytest.mark.parametrize("filters", [{"extensions": []}, {"authoredFrom": "어제"}, {"sourceKinds": "LOCAL"}])
+    def test_invalid_filters_are_rejected(self, client, ai, filters):
+        assert client.post(URL, json={"message": "q", "filters": filters}).status_code == 422
+        assert ai.search_calls == []
+
+    def test_filtered_followup_searches_again(self, client, ai):
+        client.post(URL, json={"message": "q1", "threadId": "t"})
+        client.post(URL, json={"message": "q2", "threadId": "t", "filters": {"extensions": ["pdf"]}})
+        assert len(ai.search_calls) == 2 and len(ai.jev_calls) == 0

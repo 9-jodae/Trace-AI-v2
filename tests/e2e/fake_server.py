@@ -27,7 +27,7 @@ async def can_answer(question, context, history):
     return 0.1 if "새검색" in question else probability["value"]
 
 
-async def search(query):
+async def search(query, filters=None):
     if "전체실패" in query:
         raise AiUnavailableError("x")
     if "결과없음" in query:

@@ -28,7 +28,11 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
             async with conversations.lock(thread_id):
                 saved = conversations.get(thread_id)
                 result = await request.app.state.agent.ainvoke(
-                    {"messages": [*saved["messages"], HumanMessage(content=body.message)], "context": saved["context"]},
+                    {
+                        "messages": [*saved["messages"], HumanMessage(content=body.message)],
+                        "context": saved["context"],
+                        "filters": body.filters,
+                    },
                 )
                 # 실패한 요청은 여기까지 오지 않으므로 대화 기록과 컨텍스트에 남지 않는다
                 conversations.save(thread_id, result["messages"], result["context"])

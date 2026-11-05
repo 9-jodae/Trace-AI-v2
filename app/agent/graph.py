@@ -10,6 +10,7 @@ from typing_extensions import TypedDict
 from app.agent.evidence import Evidence, parse_answer
 from app.core import config
 from app.core.errors import describe_exception
+from app.core.schemas import SearchFilters
 from app.jev.client import can_answer_probability
 from app.llm.client import generate_answer
 from app.retrieval.schemas import Chunk
@@ -26,6 +27,7 @@ NO_RESULT_ANSWER = "관련 문서를 찾지 못했습니다."
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     context: list[Chunk]
+    filters: SearchFilters | None
     evidence: list[Evidence]
     route: Literal["CONTEXT", "SEARCH"]
     context_probability: float | None
@@ -41,6 +43,9 @@ async def judge_context(state: AgentState) -> dict:
     decision = {"route": "SEARCH", "context_probability": None, "failed_sources": [], "fallback_reason": None}
     context = state.get("context")
     if not context:
+        return decision
+    # 이전 근거에 필터 밖 문서가 섞이지 않도록 필터가 있으면 재사용하지 않고 새로 검색한다
+    if state.get("filters") is not None:
         return decision
     if not config.jev_api_key():
         return {**decision, "fallback_reason": "JEV_API_KEY가 설정되지 않았습니다."}
@@ -70,7 +75,7 @@ def select_route(state: AgentState) -> str:
 
 
 async def retrieve(state: AgentState) -> dict:
-    result = await search(state["messages"][-1].text)
+    result = await search(state["messages"][-1].text, state.get("filters"))
     return {"context": result["chunks"], "failed_sources": result["failed_sources"]}
 
 

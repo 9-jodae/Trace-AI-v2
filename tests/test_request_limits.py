@@ -64,7 +64,7 @@ class TestRequestTimeout:
             calls.append(name)
             return Hanging()
 
-        async def fake_search(query):
+        async def fake_search(query, filters=None):
             return {"chunks": [chunk("a")], "failed_sources": []}
 
         monkeypatch.setenv("LLM_FALLBACK_MODEL", "fake:backup")
