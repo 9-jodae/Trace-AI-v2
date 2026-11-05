@@ -112,6 +112,37 @@ def jev_model() -> str:
     return os.getenv("JEV_MODEL") or DEFAULT_JEV_MODEL
 
 
+def spring_internal_url() -> str:
+    # AI가 적재 결과를 알릴 Spring 주소. 게이트웨이는 내부 경로를 막으므로 앱 포트를 직접 가리켜야 한다
+    return (os.getenv("SPRING_INTERNAL_URL") or "http://localhost:8080").rstrip("/")
+
+
+def storage_bucket() -> str:
+    return os.getenv("STORAGE_BUCKET") or "documents"
+
+
+def storage_prefix() -> str:
+    # 운영 S3는 Spring의 S3_PREFIX와 같아야 한다. 값이 있으면 끝에 / 하나를 붙인다
+    prefix = (os.getenv("STORAGE_PREFIX") or "").strip("/")
+    return f"{prefix}/" if prefix else ""
+
+
+def storage_endpoint_url() -> str | None:
+    return os.getenv("STORAGE_ENDPOINT_URL") or None
+
+
+def storage_access_key() -> str | None:
+    return os.getenv("STORAGE_ACCESS_KEY") or None
+
+
+def storage_secret_key() -> str | None:
+    return os.getenv("STORAGE_SECRET_KEY") or None
+
+
+def storage_region() -> str | None:
+    return os.getenv("STORAGE_REGION") or None
+
+
 def embedding_api_key() -> str | None:
     return os.getenv("EMBEDDING_API_KEY") or None
 
