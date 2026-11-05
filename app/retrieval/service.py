@@ -6,7 +6,7 @@ from typing_extensions import TypedDict
 
 from app.core import config
 from app.core.errors import AiUnavailableError, describe_exception
-from app.core.schemas import SearchFilters
+from app.core.schemas import AccessScope, SearchFilters
 from app.retrieval.embedding import embed_query
 from app.retrieval.fusion import rrf_fuse
 from app.retrieval.neo4j_store import Neo4jGraphStore
@@ -71,17 +71,20 @@ async def close_stores() -> None:
     _real_stores.cache_clear()
 
 
-async def filter_accessible_context(chunks: list[Chunk]) -> list[Chunk]:
+async def filter_accessible_context(chunks: list[Chunk], scope: AccessScope | None = None) -> list[Chunk]:
     # 이전 근거를 재사용하기 전에 권한 변경, 문서 삭제, 개정을 다시 확인한다
     vector_store, _ = get_stores()
-    accessible = await vector_store.filter_accessible([chunk["id"] for chunk in chunks], config.access_scope())
+    accessible = await vector_store.filter_accessible([chunk["id"] for chunk in chunks], scope or config.access_scope())
     return [chunk for chunk in chunks if chunk["id"] in accessible]
 
 
-async def search(query: str, filters: SearchFilters | None = None) -> SearchResult:
+async def search(
+    query: str, filters: SearchFilters | None = None, request_scope: AccessScope | None = None
+) -> SearchResult:
     # 한 DB가 실패해도 나머지 결과로 답변하고, 모두 실패하면 이전 컨텍스트를 덮어쓰지 않도록 중단한다
     vector_store, graph_store = get_stores()
-    scope = config.access_scope()
+    # 운영의 config.access_scope()는 항상 None이므로 요청에 권한 범위가 없으면 문서를 내보내지 않는다
+    scope = request_scope or config.access_scope()
     if scope is None and not config.use_sample_data():
         # 권한 범위를 모르면 어떤 문서도 근거로 내보내지 않는다. 임베딩 비용도 쓰지 않는다
         logger.warning("Search skipped: no access scope")

@@ -10,7 +10,7 @@ CONTEXT = [{"id": "doc-1", "text": "본문", "source": "문서"}]
 
 @pytest.fixture(autouse=True)
 def accessible(monkeypatch: pytest.MonkeyPatch):
-    async def keep_all(chunks: list) -> list:
+    async def keep_all(chunks: list, scope=None) -> list:
         return chunks
 
     monkeypatch.setattr(graph, "filter_accessible_context", keep_all)
@@ -96,7 +96,7 @@ class TestContextRevalidation:
     async def test_only_accessible_chunks_reach_jev_and_answer(self, monkeypatch: pytest.MonkeyPatch):
         other = {"id": "doc-2", "text": "기밀", "source": "문서"}
 
-        async def only_first(chunks: list) -> list:
+        async def only_first(chunks: list, scope=None) -> list:
             return chunks[:1]
 
         monkeypatch.setattr(graph, "filter_accessible_context", only_first)
@@ -106,7 +106,7 @@ class TestContextRevalidation:
 
     @pytest.mark.anyio
     async def test_no_accessible_chunk_searches_without_jev(self, monkeypatch: pytest.MonkeyPatch):
-        async def none(chunks: list) -> list:
+        async def none(chunks: list, scope=None) -> list:
             return []
 
         monkeypatch.setattr(graph, "filter_accessible_context", none)
@@ -116,7 +116,7 @@ class TestContextRevalidation:
 
     @pytest.mark.anyio
     async def test_revalidation_failure_drops_context_without_jev(self, monkeypatch: pytest.MonkeyPatch):
-        async def fail(chunks: list) -> list:
+        async def fail(chunks: list, scope=None) -> list:
             raise RuntimeError("db")
 
         monkeypatch.setattr(graph, "filter_accessible_context", fail)

@@ -10,7 +10,7 @@ from typing_extensions import TypedDict
 from app.agent.evidence import Evidence, parse_answer
 from app.core import config
 from app.core.errors import describe_exception
-from app.core.schemas import SearchFilters
+from app.core.schemas import AccessScope, SearchFilters
 from app.jev.client import can_answer_probability
 from app.llm.client import generate_answer
 from app.retrieval.schemas import Chunk
@@ -28,6 +28,7 @@ class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     context: list[Chunk]
     filters: SearchFilters | None
+    access_scope: AccessScope | None
     evidence: list[Evidence]
     route: Literal["CONTEXT", "SEARCH"]
     context_probability: float | None
@@ -52,7 +53,7 @@ async def judge_context(state: AgentState) -> dict:
 
     # 외부 JEV로 보내기 전에 확인한다. 확인하지 못한 근거는 재사용하지 않는다
     try:
-        context = await filter_accessible_context(context)
+        context = await filter_accessible_context(context, state.get("access_scope"))
     except Exception as exc:
         logger.error("Context revalidation failed: %s", describe_exception(exc))
         return {**decision, "context": [], "fallback_reason": f"근거 재검증 실패 ({type(exc).__name__})"}
@@ -75,7 +76,7 @@ def select_route(state: AgentState) -> str:
 
 
 async def retrieve(state: AgentState) -> dict:
-    result = await search(state["messages"][-1].text, state.get("filters"))
+    result = await search(state["messages"][-1].text, state.get("filters"), state.get("access_scope"))
     return {"context": result["chunks"], "failed_sources": result["failed_sources"]}
 
 

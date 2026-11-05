@@ -263,6 +263,49 @@ class TestFilterAccessibleContext:
         assert vector.filter_calls == [(["a", "b", "c"], SCOPE, None)]
 
 
+class TestRequestScope:
+    def test_request_scope_reaches_vector_and_graph_check(self, stores):
+        vector, graph = FakeStore(), FakeStore([chunk("b")])
+        stores(vector, graph)
+        scope = AccessScope("요청", "STAFF", "PUBLIC", False)
+        asyncio.run(service.search("질문", None, scope))
+        assert vector.calls[0][2] == scope
+        assert vector.filter_calls == [(["b"], scope, None)]
+
+    def test_production_uses_request_scope(self, monkeypatch):
+        async def embed(query):
+            return [0.1]
+
+        monkeypatch.setenv("APP_ENV", "production")
+        vector = FakeStore([chunk("a")])
+        monkeypatch.setattr(service, "get_stores", lambda: (vector, FakeStore()))
+        monkeypatch.setattr(service, "embed_query", embed)
+        scope = AccessScope("요청", "STAFF", "PUBLIC", False)
+        assert [c["id"] for c in asyncio.run(service.search("질문", None, scope))["chunks"]] == ["a"]
+        assert vector.calls[0][2] == scope
+
+    def test_production_without_request_scope_exposes_nothing(self, monkeypatch):
+        monkeypatch.setenv("APP_ENV", "production")
+        vector = FakeStore([chunk("secret")])
+        monkeypatch.setattr(service, "get_stores", lambda: (vector, vector))
+        assert asyncio.run(service.search("질문")) == {"chunks": [], "failed_sources": []}
+        assert vector.calls == []
+
+    def test_context_revalidation_uses_request_scope(self, monkeypatch):
+        vector = FakeStore(accessible={"a"})
+        monkeypatch.setattr(service, "get_stores", lambda: (vector, FakeStore()))
+        scope = AccessScope("요청", "STAFF", "PUBLIC", False)
+        asyncio.run(service.filter_accessible_context([chunk("a")], scope))
+        assert vector.filter_calls == [(["a"], scope, None)]
+
+    def test_production_revalidation_without_scope_keeps_nothing(self, monkeypatch):
+        monkeypatch.setenv("APP_ENV", "production")
+        vector = FakeStore(accessible=set())
+        monkeypatch.setattr(service, "get_stores", lambda: (vector, FakeStore()))
+        assert asyncio.run(service.filter_accessible_context([chunk("a")])) == []
+        assert vector.filter_calls[0][1] is None
+
+
 class TestPermissionFailsClosed:
     def test_no_scope_returns_nothing_and_skips_embedding(self, monkeypatch):
         async def forbidden(query):

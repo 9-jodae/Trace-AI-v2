@@ -32,6 +32,7 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
                         "messages": [*saved["messages"], HumanMessage(content=body.message)],
                         "context": saved["context"],
                         "filters": body.filters,
+                        "access_scope": body.access_scope.to_scope() if body.access_scope else None,
                     },
                 )
                 # 실패한 요청은 여기까지 오지 않으므로 대화 기록과 컨텍스트에 남지 않는다

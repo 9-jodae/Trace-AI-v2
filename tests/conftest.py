@@ -70,12 +70,14 @@ class FakeAi:
             raise self.probability
         return self.probability
 
-    async def filter_context(self, chunks):
+    async def filter_context(self, chunks, scope=None):
+        self.filter_scope = scope
         return chunks
 
-    async def search(self, query, filters=None):
+    async def search(self, query, filters=None, scope=None):
         self.search_calls.append(query)
         self.search_filters = filters
+        self.search_scope = scope
         if isinstance(self.search_result, Exception):
             raise self.search_result
         return self.search_result

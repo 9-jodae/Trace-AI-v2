@@ -27,7 +27,7 @@ async def can_answer(question, context, history):
     return 0.1 if "새검색" in question else probability["value"]
 
 
-async def search(query, filters=None):
+async def search(query, filters=None, scope=None):
     if "전체실패" in query:
         raise AiUnavailableError("x")
     if "결과없음" in query:
@@ -35,7 +35,7 @@ async def search(query, filters=None):
     return {"chunks": [CHUNK], "failed_sources": ["graph"] if "부분실패" in query else []}
 
 
-async def filter_context(chunks):
+async def filter_context(chunks, scope=None):
     return chunks
 
 

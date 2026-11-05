@@ -207,3 +207,46 @@ class TestFilters:
         client.post(URL, json={"message": "q1", "threadId": "t"})
         client.post(URL, json={"message": "q2", "threadId": "t", "filters": {"extensions": ["pdf"]}})
         assert len(ai.search_calls) == 2 and len(ai.jev_calls) == 0
+
+
+class TestAccessScope:
+    SCOPE = {
+        "departmentId": "11111111-1111-1111-1111-111111111111",
+        "position": "STAFF",
+        "clearance": "INTERNAL",
+        "isAdmin": False,
+    }
+
+    def test_scope_reaches_search(self, client, ai):
+        assert client.post(URL, json={"message": "q", "accessScope": self.SCOPE}).status_code == 200
+        assert ai.search_scope == ("11111111-1111-1111-1111-111111111111", "STAFF", "INTERNAL", False)
+
+    def test_same_scope_is_used_for_context_revalidation(self, client, ai):
+        client.post(URL, json={"message": "q1", "threadId": "t", "accessScope": self.SCOPE})
+        client.post(URL, json={"message": "q2", "threadId": "t", "accessScope": {**self.SCOPE, "isAdmin": True}})
+        assert ai.filter_scope[3] is True
+
+    def test_missing_scope_is_none(self, client, ai):
+        client.post(URL, json={"message": "q"})
+        assert ai.search_scope is None
+
+    @pytest.mark.parametrize(
+        "change",
+        [
+            {"departmentId": "not-uuid"},
+            {"departmentId": None},
+            {"position": None},
+            {"clearance": None},
+            {"isAdmin": "true"},
+            {"isAdmin": None},
+            {"position": "x" * 31},
+        ],
+    )
+    def test_invalid_scope_is_rejected_before_search(self, client, ai, change):
+        body = {"message": "q", "accessScope": {**self.SCOPE, **change}}
+        assert client.post(URL, json=body).status_code == 422
+        assert ai.search_calls == []
+
+    def test_incomplete_scope_is_rejected(self, client, ai):
+        assert client.post(URL, json={"message": "q", "accessScope": {"isAdmin": True}}).status_code == 422
+        assert ai.search_calls == []

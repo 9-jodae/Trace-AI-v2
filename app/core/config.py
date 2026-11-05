@@ -38,7 +38,7 @@ def use_sample_data() -> bool:
 
 
 def access_scope() -> AccessScope | None:
-    # 운영에서는 사용자별 권한을 요청으로 받아야 하므로 환경 변수로 열어 주지 않는다 (AccessScope 전달 형식 대기)
+    # 요청에 accessScope가 없을 때 쓰는 로컬 시험용 값. 운영에서는 환경 변수로 권한을 열어 주지 않는다
     if is_production():
         return None
     is_admin = os.getenv("ACCESS_IS_ADMIN") == "true"

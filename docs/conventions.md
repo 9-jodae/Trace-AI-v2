@@ -14,7 +14,6 @@
 
 추측해서 구현하지 않고, `docs199-Server#14`, `#15`에서 확정되면 반영합니다.
 
-- 질문 요청으로 사용자 권한 범위(`AccessScope`)를 받는 JSON 형식
 - 응답의 핵심 문구(`evidence`) 필드 이름과 Spring 전달 방식. 현재 형식은 임시입니다.
 - PDF 페이지와 `bbox`(`chunks.page`, `chunks.location`). 파서 확정 후 저장합니다.
 - `/ingest` 요청·콜백 필드와 원본 파일 전달 방식
