@@ -98,13 +98,57 @@ class TestGraph:
     @pytest.mark.anyio
     async def test_judge_threshold_and_failure(self, judged, probability, expected):
         judged(edit_request=probability)
-        result = await graph.judge_small_talk(self.state())
+        result = await graph.judge_small_talk(self.state("이 내용 좀 정리해 볼까"))
         assert result["edit_request"] is expected and result["small_talk"] is False
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "최대 5일로 수정해줘",
+            "값 변경해줘",
+            "이거 고쳐줘",
+            "내용 반영해줘",
+            "7일을 5일로 바꿔줘",
+            "둘이 맞춰줘",
+            "충돌 해결해줘",
+            "이월 일수 수정 부탁",
+            "5일로 해줘",
+            "수정해 주세요",
+        ],
+    )
+    @pytest.mark.anyio
+    async def test_direct_edit_words_are_recognized_without_jev(self, judged, text):
+        judged(edit_request=RuntimeError("down"))
+        result = await graph.judge_small_talk(self.state(text))
+        assert result["edit_request"] is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "연차 이월 며칠이야?",
+            "수정 방법이 뭐야?",
+            "최근 변경 내용 알려줘",
+            "문서 어떻게 바꿔?",
+            "충돌이 뭐야?",
+            "안녕",
+        ],
+    )
+    @pytest.mark.anyio
+    async def test_ordinary_questions_are_not_edit_requests(self, judged, text):
+        judged(edit_request=0.1)
+        assert (await graph.judge_small_talk(self.state(text)))["edit_request"] is False
+
+    @pytest.mark.anyio
+    async def test_edit_request_is_not_small_talk(self, judged):
+        judged(small_talk=0.99, edit_request=0.99)
+        result = await graph.judge_small_talk(self.state("최대 5일로 수정해줘"))
+        assert result["small_talk"] is False and result["edit_request"] is True
 
     @pytest.mark.anyio
     async def test_no_key_means_no_edit_request(self, monkeypatch):
         monkeypatch.setattr(config, "jev_api_key", lambda: None)
-        assert (await graph.judge_small_talk(self.state()))["edit_request"] is False
+        assert (await graph.judge_small_talk(self.state("연차 며칠이야?")))["edit_request"] is False
+        assert (await graph.judge_small_talk(self.state()))["edit_request"] is True
 
     def test_edit_request_searches_with_previous_question(self):
         from langchain_core.messages import AIMessage, HumanMessage

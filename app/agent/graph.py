@@ -33,6 +33,12 @@ CONTEXT_REUSE_THRESHOLD = 0.7
 SMALL_TALK_THRESHOLD = 0.9
 # 잘못 판단해도 제안만 나가고 문서는 바뀌지 않는다. 일반 질문에 제안이 붙지 않게 높게 잡는다
 EDIT_REQUEST_THRESHOLD = 0.8
+# 값을 직접 바꾸라는 말은 판단 모델이 놓쳐도 제안으로 보낸다. "수정 방법이 뭐야" 같은 질문은 걸리지 않는다
+EDIT_REQUEST_PATTERN = re.compile(
+    r"(수정|변경|반영|통일|해결|교체|정정)\s*(을|를)?\s*(해\s*(줘|주세요|주라|봐|라)|하자|해야|부탁|좀)"
+    r"|(바꿔|고쳐|맞춰|바꾸어|고치어)\s*(줘|주세요|주라|봐|라)?\s*(줘|주세요|$|[.!])"
+    r"|\d+\s*(일|개|시간|만원|원|%)?\s*(으로|로)\s*(해\s*(줘|주세요)|하자)"
+)
 HISTORY_LIMIT = 6
 # 질문만으로는 검색어가 부족한 후속 질문. "그룹"처럼 단어의 일부인 경우는 제외한다
 FOLLOW_UP_PATTERN = re.compile(r"^(그럼|그러면|그건|그게|그거|그것|그 |이건|이게|이거|이 경우|앞서|위 )")
@@ -66,9 +72,12 @@ def _history(state: AgentState) -> list[AnyMessage]:
 
 async def judge_small_talk(state: AgentState) -> dict:
     # "네"처럼 되물음에 답한 말은 일상 대화로 보내지 않는다
-    if not config.jev_api_key() or _follows_clarification(state):
-        return {"small_talk": False, "edit_request": False, "edit_proposals": []}
     question = state["messages"][-1].text
+    if _follows_clarification(state):
+        return {"small_talk": False, "edit_request": False, "edit_proposals": []}
+    pattern_match = EDIT_REQUEST_PATTERN.search(question) is not None
+    if not config.jev_api_key():
+        return {"small_talk": False, "edit_request": pattern_match, "edit_proposals": []}
     small_talk_result, edit_result = await asyncio.gather(
         small_talk_probability(question), edit_request_probability(question), return_exceptions=True
     )
@@ -77,9 +86,13 @@ async def judge_small_talk(state: AgentState) -> dict:
         logger.error("Small talk judge failed: %s", describe_exception(small_talk_result))
     if isinstance(edit_result, Exception):
         logger.error("Edit request judge failed: %s", describe_exception(edit_result))
+    edit_request = pattern_match or (not isinstance(edit_result, Exception) and edit_result >= EDIT_REQUEST_THRESHOLD)
     return {
-        "small_talk": not isinstance(small_talk_result, Exception) and small_talk_result >= SMALL_TALK_THRESHOLD,
-        "edit_request": not isinstance(edit_result, Exception) and edit_result >= EDIT_REQUEST_THRESHOLD,
+        # 수정 요청은 문서를 찾아야 하므로 일상 대화로 보내지 않는다
+        "small_talk": not edit_request
+        and not isinstance(small_talk_result, Exception)
+        and small_talk_result >= SMALL_TALK_THRESHOLD,
+        "edit_request": edit_request,
         "edit_proposals": [],
     }
 
