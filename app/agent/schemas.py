@@ -21,11 +21,21 @@ class AccessScopeInput(CamelModel):
         return AccessScope(str(self.department_id), self.position, self.clearance, self.is_admin)
 
 
+class KnownConflictInput(CamelModel):
+    """호출자가 두 문서를 모두 볼 수 있는 등록 충돌. Spring이 걸러 보낸다 (docs199-Server#101)."""
+
+    relation_id: UUID
+    document_id: UUID
+    other_document_id: UUID
+    item: str
+
+
 class ChatRequest(CamelModel):
     message: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_MESSAGE_LENGTH)]
     thread_id: str | None = Field(default=None, max_length=128)
     filters: SearchFilters | None = None
     access_scope: AccessScopeInput | None = None
+    known_conflicts: list[KnownConflictInput] | None = None
 
 
 class SourceChunk(CamelModel):
