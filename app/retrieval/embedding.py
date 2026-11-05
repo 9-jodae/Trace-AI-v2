@@ -47,7 +47,9 @@ def _build_embedder(model: str, api_key: str | None, dimensions: int):
     # Bedrock은 API 키 대신 실행 환경의 AWS 자격 증명을 쓰고, 차원을 model_kwargs로 받는다
     # 질문과 문서가 같은 설정이어야 검색이 맞으므로 서버 계약의 normalize를 명시한다
     if config.uses_aws_credentials(model):
-        return init_embeddings(model, model_kwargs={"dimensions": dimensions, "normalize": True})
+        return init_embeddings(
+            model, model_kwargs={"dimensions": dimensions, "normalize": True}, **config.bedrock_options()
+        )
     return init_embeddings(model, api_key=api_key, dimensions=dimensions)
 
 

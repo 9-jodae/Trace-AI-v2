@@ -3,6 +3,7 @@ import json
 
 import httpx
 import pytest
+from langchain_aws import BedrockEmbeddings
 
 from app.core.errors import AiUnavailableError
 from app.retrieval import embedding
@@ -67,6 +68,25 @@ def test_bedrock_uses_aws_credentials_and_model_kwargs(monkeypatch, init):
     monkeypatch.setenv("EMBEDDING_API_KEY", "")
     asyncio.run(embedding.embed_query("질문"))
     assert init == [("bedrock:amazon.titan-embed-text-v2:0", {"model_kwargs": {"dimensions": 1024, "normalize": True}})]
+
+
+def test_bedrock_region_overrides_aws_default(monkeypatch, init):
+    monkeypatch.setenv("EMBEDDING_MODEL", "bedrock:amazon.titan-embed-text-v2:0")
+    monkeypatch.setenv("AWS_REGION", "ap-southeast-1")
+    monkeypatch.setenv("BEDROCK_REGION", "ap-northeast-1")
+    embedding._build_embedder.cache_clear()
+    asyncio.run(embedding.embed_query("질문"))
+    assert init[0][1]["region_name"] == "ap-northeast-1"
+    embedding._build_embedder.cache_clear()
+
+
+def test_real_bedrock_client_uses_bedrock_region(monkeypatch):
+    monkeypatch.setenv("AWS_REGION", "ap-southeast-1")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "ap-southeast-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "fake")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake")
+    client = BedrockEmbeddings(model_id="amazon.titan-embed-text-v2:0", region_name="ap-northeast-1")
+    assert client.client.meta.region_name == "ap-northeast-1"
 
 
 def test_query_with_wrong_dimensions_is_rejected(init, monkeypatch):

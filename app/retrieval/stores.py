@@ -1,13 +1,17 @@
+import asyncio
 import math
+import re
 from typing import Protocol
 
-import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
+from app.core import config
 from app.core.schemas import AccessScope, SearchFilters
 from app.retrieval.embedding import embed_documents
 from app.retrieval.schemas import Chunk
 
+MAX_FULLTEXT_TERMS = 12
 # chunks.embedding 컬럼의 차원 (docs199-Server V11)
 CHUNK_EMBEDDING_DIMENSIONS = 1024
 # 권한과 필터 판단은 서버 함수에 맡긴다. 삭제된 문서와 이전 버전도 함수가 제외한다 (docs199-Server V12, V13)
@@ -18,7 +22,18 @@ FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s
 JOIN document_versions dv ON dv.id = c.document_version_id
 JOIN documents d ON d.id = dv.document_id
 WHERE c.embedding IS NOT NULL
+  AND c.embedding <=> %s::vector <= %s
 ORDER BY c.embedding <=> %s::vector
+LIMIT %s
+"""
+FULLTEXT_SEARCH_SQL = """
+SELECT c.id::text AS id, c.content AS text, d.title AS source, dv.document_id::text AS document_id,
+       c.document_version_id::text AS version_id, c.char_start, c.char_end
+FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
+JOIN document_versions dv ON dv.id = c.document_version_id
+JOIN documents d ON d.id = dv.document_id
+WHERE to_tsvector('simple', c.content) @@ to_tsquery('simple', %s)
+ORDER BY ts_rank_cd(to_tsvector('simple', c.content), to_tsquery('simple', %s)) DESC, c.id
 LIMIT %s
 """
 FILTER_ACCESSIBLE_SQL = """
@@ -31,9 +46,19 @@ SELECT c.id::text AS id
 FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
 WHERE c.id = ANY(%s::uuid[])
 """
+SET_STATEMENT_TIMEOUT_SQL = "SELECT set_config('statement_timeout', %s, true)"
 CONNECT_TIMEOUT_SECONDS = 5
+# 연결이 모두 사용 중이면 이 시간까지 기다린 뒤 실패한다
+POOL_WAIT_SECONDS = 5
+POOL_MIN_SIZE = 1
 SEARCH_STATEMENT_TIMEOUT_MS = 5_000
 WRITE_STATEMENT_TIMEOUT_MS = 60_000
+IS_CURRENT_VERSION_SQL = """
+SELECT 1 AS current
+FROM document_versions dv
+JOIN documents d ON d.id = dv.document_id
+WHERE dv.id = %s::uuid AND dv.version_number = d.current_version AND d.deleted_at IS NULL
+"""
 DELETE_VERSION_SQL = "DELETE FROM chunks WHERE document_version_id = %s"
 INSERT_CHUNK_SQL = """
 INSERT INTO chunks (id, document_version_id, chunk_index, content, char_start, char_end, content_hash, embedding)
@@ -54,9 +79,19 @@ SAMPLE_ENTITIES = {
 }
 
 
+def build_fulltext_query(text: str) -> str:
+    # 사용자 입력은 단어만 뽑아 tsquery 구문으로 해석되지 않게 한다
+    terms = re.findall(r"\w+", text, flags=re.UNICODE)[:MAX_FULLTEXT_TERMS]
+    return " | ".join(f"'{term}':*" for term in terms)
+
+
 class VectorStore(Protocol):
     async def search(
         self, embedding: list[float], limit: int, scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> list[Chunk]: ...
+
+    async def fulltext(
+        self, query: str, limit: int, scope: AccessScope | None, filters: SearchFilters | None = None
     ) -> list[Chunk]: ...
 
     async def filter_accessible(
@@ -94,17 +129,41 @@ def _cosine(a: list[float], b: list[float]) -> float:
 class PostgresVectorStore:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
+        self._pool: AsyncConnectionPool | None = None
+        self._pool_lock = asyncio.Lock()
 
     async def close(self) -> None:
-        pass
+        if self._pool is not None:
+            await self._pool.close()
+            self._pool = None
+
+    async def _get_pool(self) -> AsyncConnectionPool:
+        # 이벤트 루프 안에서 열어야 하므로 첫 사용 때 만든다. 실패하면 다음 요청이 다시 시도한다
+        async with self._pool_lock:
+            if self._pool is None:
+                pool = AsyncConnectionPool(
+                    self._database_url,
+                    min_size=POOL_MIN_SIZE,
+                    max_size=config.db_pool_max_size(),
+                    timeout=POOL_WAIT_SECONDS,
+                    open=False,
+                    # DB 재시작 뒤 끊어진 연결을 요청에 내주지 않는다
+                    check=AsyncConnectionPool.check_connection,
+                    kwargs={"row_factory": dict_row, "connect_timeout": CONNECT_TIMEOUT_SECONDS},
+                )
+                try:
+                    await pool.open(wait=True, timeout=CONNECT_TIMEOUT_SECONDS)
+                except Exception:
+                    await pool.close()
+                    raise
+                self._pool = pool
+            return self._pool
 
     async def _read(self, sql: str, params: tuple) -> list[dict]:
-        async with await psycopg.AsyncConnection.connect(
-            self._database_url,
-            row_factory=dict_row,
-            connect_timeout=CONNECT_TIMEOUT_SECONDS,
-            options=f"-c statement_timeout={SEARCH_STATEMENT_TIMEOUT_MS}",
-        ) as connection:
+        pool = await self._get_pool()
+        async with pool.connection() as connection:
+            # 트랜잭션 안에서만 적용되어 연결을 돌려줄 때 제한이 남지 않는다
+            await connection.execute(SET_STATEMENT_TIMEOUT_SQL, (str(SEARCH_STATEMENT_TIMEOUT_MS),))
             cursor = await connection.execute(sql, params)
             return await cursor.fetchall()
 
@@ -113,7 +172,19 @@ class PostgresVectorStore:
     ) -> list[Chunk]:
         if scope is None:
             return []
-        return await self._read(VECTOR_SEARCH_SQL, (*scope, *_filter_params(filters), _to_vector(embedding), limit))
+        vector = _to_vector(embedding)
+        return await self._read(
+            VECTOR_SEARCH_SQL,
+            (*scope, *_filter_params(filters), vector, config.vector_max_cosine_distance(), vector, limit),
+        )
+
+    async def fulltext(
+        self, query: str, limit: int, scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> list[Chunk]:
+        expression = build_fulltext_query(query)
+        if scope is None or not expression:
+            return []
+        return await self._read(FULLTEXT_SEARCH_SQL, (*scope, *_filter_params(filters), expression, expression, limit))
 
     async def filter_accessible(
         self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
@@ -126,14 +197,19 @@ class PostgresVectorStore:
             rows = await self._read(FILTER_ACCESSIBLE_WITH_FILTERS_SQL, (*scope, *_filter_params(filters), chunk_ids))
         return {row["id"] for row in rows}
 
-    async def replace_version(self, version_id: str, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
+    async def is_current_version(self, version_id: str) -> bool:
+        return bool(await self._read(IS_CURRENT_VERSION_SQL, (version_id,)))
+
+    async def replace_version(self, version_id: str, chunks: list[Chunk], embeddings: list[list[float]]) -> bool:
         # 재색인 시 줄어든 청크가 남지 않도록 같은 버전의 청크를 한 트랜잭션에서 교체한다
+        # 늦게 끝난 구버전 작업이 이전 청크를 되살리지 않도록 쓰기 직전에 현재 버전인지 확인한다
         pairs = list(zip(chunks, embeddings, strict=True))
-        async with await psycopg.AsyncConnection.connect(
-            self._database_url,
-            connect_timeout=CONNECT_TIMEOUT_SECONDS,
-            options=f"-c statement_timeout={WRITE_STATEMENT_TIMEOUT_MS}",
-        ) as connection:
+        pool = await self._get_pool()
+        async with pool.connection() as connection:
+            await connection.execute(SET_STATEMENT_TIMEOUT_SQL, (str(WRITE_STATEMENT_TIMEOUT_MS),))
+            current = await connection.execute(IS_CURRENT_VERSION_SQL, (version_id,))
+            if await current.fetchone() is None:
+                return False
             await connection.execute(DELETE_VERSION_SQL, (version_id,))
             async with connection.cursor() as cursor:
                 await cursor.executemany(
@@ -152,6 +228,7 @@ class PostgresVectorStore:
                         for chunk, embedding in pairs
                     ],
                 )
+        return True
 
 
 class NoGraphStore:
@@ -180,6 +257,11 @@ class SampleVectorStore:
         scored = zip(SAMPLE_CHUNKS, self._embeddings)
         ranked = sorted(scored, key=lambda item: _cosine(embedding, item[1]), reverse=True)
         return [chunk for chunk, _ in ranked[:limit]]
+
+    async def fulltext(
+        self, query: str, limit: int, scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> list[Chunk]:
+        return []
 
     async def filter_accessible(
         self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None

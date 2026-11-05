@@ -250,3 +250,41 @@ class TestAccessScope:
     def test_incomplete_scope_is_rejected(self, client, ai):
         assert client.post(URL, json={"message": "q", "accessScope": {"isAdmin": True}}).status_code == 422
         assert ai.search_calls == []
+
+
+class TestNoEvidenceAnswer:
+    def test_refusal_clears_sources_and_context(self, client, ai, monkeypatch):
+        async def refuse(question, context, history):
+            return '{"answer": "관련 문서를 찾지 못했습니다.", "evidence": []}'
+
+        monkeypatch.setattr(graph, "generate_answer", refuse)
+        body = client.post(URL, json={"message": "점심 뭐 먹지", "threadId": "t"}).json()
+        assert body["sources"] == [] and body["evidence"] == []
+        monkeypatch.setattr(graph, "generate_answer", ai.generate)
+        client.post(URL, json={"message": "다음 질문", "threadId": "t"})
+        assert ai.jev_calls == [] and len(ai.search_calls) == 2
+
+
+class TestFollowUpSearch:
+    @pytest.mark.parametrize(
+        "question, merged",
+        [("그럼 영수증은 언제까지야?", True), ("그 규정은 누가 만들었어?", True), ("이 경우 어떻게 해?", True)],
+    )
+    def test_follow_up_includes_previous_question(self, client, ai, monkeypatch, question, merged):
+        ai.probability = 0.1
+        client.post(URL, json={"message": "출장 숙박비 한도", "threadId": "f"})
+        client.post(URL, json={"message": question, "threadId": "f"})
+        assert ai.search_calls[-1] == f"출장 숙박비 한도\n{question}"
+        assert ai.llm_calls[-1]["question"] == question
+
+    @pytest.mark.parametrize("question", ["그룹 권한은 어떻게 돼?", "연차는 며칠이야?", "그것참"])
+    def test_other_questions_stay_unchanged(self, client, ai, question):
+        ai.probability = 0.1
+        client.post(URL, json={"message": "출장 숙박비 한도", "threadId": "g"})
+        client.post(URL, json={"message": question, "threadId": "g"})
+        expected = question if question != "그것참" else f"출장 숙박비 한도\n{question}"
+        assert ai.search_calls[-1] == expected
+
+    def test_first_question_stays_unchanged(self, client, ai):
+        client.post(URL, json={"message": "그럼 영수증은?"})
+        assert ai.search_calls == ["그럼 영수증은?"]

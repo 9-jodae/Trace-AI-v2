@@ -1,12 +1,15 @@
 import argparse
 import asyncio
 import json
+import logging
 from pathlib import Path
 
 from app.retrieval.chunking import chunk_document
 from app.retrieval.embedding import embed_documents
 from app.retrieval.schemas import DocumentInput
 from app.retrieval.service import close_stores, get_real_stores
+
+logger = logging.getLogger(__name__)
 
 
 def load_documents(path: Path) -> list[DocumentInput]:
@@ -27,9 +30,15 @@ async def index_document(document: DocumentInput) -> int:
     chunks = chunk_document(document["document_id"], document["version_id"], document["text"], document["source"])
     if not chunks:
         return 0
-    embeddings = await embed_documents([chunk["text"] for chunk in chunks])
     vector_store, graph_store = get_real_stores()
-    await vector_store.replace_version(document["version_id"], chunks, embeddings)
+    # 구버전 작업이면 임베딩 비용을 쓰지 않는다
+    if not await vector_store.is_current_version(document["version_id"]):
+        logger.warning("Indexing skipped: not the current version")
+        return 0
+    embeddings = await embed_documents([chunk["text"] for chunk in chunks])
+    if not await vector_store.replace_version(document["version_id"], chunks, embeddings):
+        logger.warning("Indexing skipped: version changed while embedding")
+        return 0
     metadata = {key: value for key, value in document.items() if key != "text"}
     await graph_store.replace_version(document["version_id"], document["document_id"], metadata, chunks)
     return len(chunks)

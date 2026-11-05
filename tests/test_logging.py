@@ -69,6 +69,9 @@ def test_search_failure_log_has_no_exception_text(monkeypatch, caplog):
         async def search(self, value, limit, scope, filters=None):
             raise RuntimeError(SECRET)
 
+        async def fulltext(self, value, limit, scope, filters=None):
+            return []
+
         async def filter_accessible(self, chunk_ids, scope, filters=None):
             return set()
 

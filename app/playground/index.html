@@ -97,9 +97,12 @@ ol { margin: 0; padding-left: 20px; color: var(--muted); font-size: 14px; }
 </main>
 <script>
 const EXAMPLES = [
-  "재택근무 규정은 누가 승인했어?",
-  "그 규정의 소유 부서는 어디야?",
-  "E4012 오류는 왜 발생해?",
+  "국내 출장 숙박비 한도는 1박에 얼마야?",
+  "그럼 영수증은 언제까지 내야 해?",
+  "미사용 연차는 며칠까지 이월할 수 있어?",
+  "보안 사고가 나면 몇 분 안에 신고해야 해?",
+  "전략 고객 할인은 몇 퍼센트까지 가능해?",
+  "오늘 점심 메뉴 추천해 줘",
 ];
 const NODES = ["question", "jev", "context", "vector", "graph", "rrf", "llm"];
 const EDGES = ["question", "context", "context-llm", "vector", "graph", "vector-rrf", "graph-rrf", "rrf-llm"];

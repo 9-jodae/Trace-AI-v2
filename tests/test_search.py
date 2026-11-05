@@ -15,19 +15,28 @@ SCOPE_FROM_ENV = AccessScope(None, None, "INTERNAL", False)
 
 
 class FakeStore:
-    def __init__(self, result=None, error=None, accessible=None, filter_error=None):
+    def __init__(self, result=None, error=None, accessible=None, filter_error=None, fulltext=None, fulltext_error=None):
         self.result = result or []
         self.error = error
         self.accessible = accessible
         self.filter_error = filter_error
+        self.fulltext_result = fulltext or []
+        self.fulltext_error = fulltext_error
         self.calls = []
         self.filter_calls = []
+        self.fulltext_calls = []
 
     async def search(self, query_or_embedding, limit, *scope):
         self.calls.append((query_or_embedding, limit, *scope))
         if self.error:
             raise self.error
         return self.result
+
+    async def fulltext(self, query, limit, scope, filters=None):
+        self.fulltext_calls.append((query, limit, scope, filters))
+        if self.fulltext_error:
+            raise self.fulltext_error
+        return self.fulltext_result
 
     async def filter_accessible(self, chunk_ids, scope, filters=None):
         self.filter_calls.append((chunk_ids, scope, filters))
@@ -109,7 +118,7 @@ def test_embedding_failure_counts_as_vector_failure(monkeypatch):
 
 
 def test_both_failures_raise(stores):
-    stores(FakeStore(error=RuntimeError("x")), FakeStore(error=RuntimeError("y")))
+    stores(FakeStore(error=RuntimeError("x"), fulltext_error=RuntimeError("z")), FakeStore(error=RuntimeError("y")))
     with pytest.raises(AiUnavailableError):
         asyncio.run(service.search("질문"))
 
@@ -221,6 +230,41 @@ class TestRealStoreSelection:
         asyncio.run(service.close_stores())
 
 
+class TestFulltextFallback:
+    def test_runs_when_graph_has_few_results(self, stores):
+        vector = FakeStore([chunk("a")], fulltext=[chunk("t")])
+        stores(vector, FakeStore([chunk("b")]))
+        filters = SearchFilters(extensions=["pdf"])
+        result = asyncio.run(service.search("질문", filters))
+        assert vector.fulltext_calls == [("질문", service.SOURCE_LIMIT, SCOPE, filters)]
+        assert {c["id"] for c in result["chunks"]} == {"a", "b", "t"}
+
+    def test_skipped_when_graph_has_enough_results(self, stores):
+        vector = FakeStore(fulltext=[chunk("t")])
+        stores(vector, FakeStore([chunk(str(i)) for i in range(service.FULLTEXT_FALLBACK_BELOW)]))
+        asyncio.run(service.search("질문"))
+        assert vector.fulltext_calls == []
+
+    def test_results_in_both_rank_higher(self, stores):
+        stores(FakeStore([chunk("a"), chunk("b")], fulltext=[chunk("b"), chunk("c")]), FakeStore())
+        assert asyncio.run(service.search("질문"))["chunks"][0]["id"] == "b"
+
+    def test_failure_is_reported_and_keeps_others(self, stores):
+        stores(FakeStore([chunk("a")], fulltext_error=RuntimeError("x")), FakeStore())
+        assert asyncio.run(service.search("질문")) == {"chunks": [chunk("a")], "failed_sources": ["fulltext"]}
+
+    def test_keeps_answering_when_vector_and_graph_fail(self, stores):
+        vector = FakeStore(error=RuntimeError("x"), fulltext=[chunk("t")])
+        stores(vector, FakeStore(error=RuntimeError("y")))
+        assert asyncio.run(service.search("질문")) == {"chunks": [chunk("t")], "failed_sources": ["vector", "graph"]}
+
+    def test_no_scope_skips_fulltext(self, monkeypatch):
+        store = FakeStore(fulltext=[chunk("secret")])
+        monkeypatch.setattr(service, "get_stores", lambda: (store, store))
+        assert asyncio.run(service.search("질문"))["chunks"] == []
+        assert store.fulltext_calls == []
+
+
 class TestGraphPermissionFilter:
     def test_inaccessible_graph_results_are_removed(self, stores):
         vector = FakeStore(accessible={"b"})
@@ -244,7 +288,8 @@ class TestGraphPermissionFilter:
         assert result == {"chunks": [chunk("a")], "failed_sources": ["graph"]}
 
     def test_postgres_down_exposes_nothing(self, stores):
-        stores(FakeStore(error=RuntimeError("db"), filter_error=RuntimeError("db")), FakeStore([chunk("secret")]))
+        down = RuntimeError("db")
+        stores(FakeStore(error=down, filter_error=down, fulltext_error=down), FakeStore([chunk("secret")]))
         with pytest.raises(AiUnavailableError):
             asyncio.run(service.search("질문"))
 
