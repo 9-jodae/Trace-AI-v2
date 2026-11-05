@@ -1,4 +1,5 @@
 import math
+import re
 from typing import Protocol
 
 import psycopg
@@ -8,6 +9,7 @@ from app.core.schemas import AccessScope, SearchFilters
 from app.retrieval.embedding import embed_documents
 from app.retrieval.schemas import Chunk
 
+MAX_FULLTEXT_TERMS = 12
 # chunks.embedding 컬럼의 차원 (docs199-Server V11)
 CHUNK_EMBEDDING_DIMENSIONS = 1024
 # 권한과 필터 판단은 서버 함수에 맡긴다. 삭제된 문서와 이전 버전도 함수가 제외한다 (docs199-Server V12, V13)
@@ -19,6 +21,16 @@ JOIN document_versions dv ON dv.id = c.document_version_id
 JOIN documents d ON d.id = dv.document_id
 WHERE c.embedding IS NOT NULL
 ORDER BY c.embedding <=> %s::vector
+LIMIT %s
+"""
+FULLTEXT_SEARCH_SQL = """
+SELECT c.id::text AS id, c.content AS text, d.title AS source, dv.document_id::text AS document_id,
+       c.document_version_id::text AS version_id, c.char_start, c.char_end
+FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
+JOIN document_versions dv ON dv.id = c.document_version_id
+JOIN documents d ON d.id = dv.document_id
+WHERE to_tsvector('simple', c.content) @@ to_tsquery('simple', %s)
+ORDER BY ts_rank_cd(to_tsvector('simple', c.content), to_tsquery('simple', %s)) DESC, c.id
 LIMIT %s
 """
 FILTER_ACCESSIBLE_SQL = """
@@ -54,9 +66,19 @@ SAMPLE_ENTITIES = {
 }
 
 
+def build_fulltext_query(text: str) -> str:
+    # 사용자 입력은 단어만 뽑아 tsquery 구문으로 해석되지 않게 한다
+    terms = re.findall(r"\w+", text, flags=re.UNICODE)[:MAX_FULLTEXT_TERMS]
+    return " | ".join(f"'{term}':*" for term in terms)
+
+
 class VectorStore(Protocol):
     async def search(
         self, embedding: list[float], limit: int, scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> list[Chunk]: ...
+
+    async def fulltext(
+        self, query: str, limit: int, scope: AccessScope | None, filters: SearchFilters | None = None
     ) -> list[Chunk]: ...
 
     async def filter_accessible(
@@ -114,6 +136,14 @@ class PostgresVectorStore:
         if scope is None:
             return []
         return await self._read(VECTOR_SEARCH_SQL, (*scope, *_filter_params(filters), _to_vector(embedding), limit))
+
+    async def fulltext(
+        self, query: str, limit: int, scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> list[Chunk]:
+        expression = build_fulltext_query(query)
+        if scope is None or not expression:
+            return []
+        return await self._read(FULLTEXT_SEARCH_SQL, (*scope, *_filter_params(filters), expression, expression, limit))
 
     async def filter_accessible(
         self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
@@ -180,6 +210,11 @@ class SampleVectorStore:
         scored = zip(SAMPLE_CHUNKS, self._embeddings)
         ranked = sorted(scored, key=lambda item: _cosine(embedding, item[1]), reverse=True)
         return [chunk for chunk, _ in ranked[:limit]]
+
+    async def fulltext(
+        self, query: str, limit: int, scope: AccessScope | None, filters: SearchFilters | None = None
+    ) -> list[Chunk]:
+        return []
 
     async def filter_accessible(
         self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None

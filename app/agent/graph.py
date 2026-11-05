@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from typing import Annotated, Awaitable, Callable, Literal
 
@@ -12,7 +13,7 @@ from app.core import config
 from app.core.errors import describe_exception
 from app.core.schemas import AccessScope, SearchFilters
 from app.jev.client import can_answer_probability
-from app.llm.client import generate_answer
+from app.llm.client import NO_EVIDENCE_ANSWER, generate_answer
 from app.retrieval.schemas import Chunk
 from app.retrieval.service import filter_accessible_context, search
 
@@ -21,7 +22,8 @@ logger = logging.getLogger(__name__)
 # 잘못 재사용하면 틀린 답이 나가므로 애매하면 검색하도록 높게 잡는다
 CONTEXT_REUSE_THRESHOLD = 0.7
 HISTORY_LIMIT = 6
-NO_RESULT_ANSWER = "관련 문서를 찾지 못했습니다."
+# 질문만으로는 검색어가 부족한 후속 질문. "그룹"처럼 단어의 일부인 경우는 제외한다
+FOLLOW_UP_PATTERN = re.compile(r"^(그럼|그러면|그건|그게|그거|그것|그 |이건|이게|이거|이 경우|앞서|위 )")
 
 
 class AgentState(TypedDict):
@@ -75,18 +77,30 @@ def select_route(state: AgentState) -> str:
     return "generate" if state["route"] == "CONTEXT" else "retrieve"
 
 
+def _search_query(state: AgentState) -> str:
+    question = state["messages"][-1].text
+    if not FOLLOW_UP_PATTERN.match(question):
+        return question
+    previous = next((message.text for message in reversed(_history(state)) if message.type == "human"), None)
+    return f"{previous}\n{question}" if previous else question
+
+
 async def retrieve(state: AgentState) -> dict:
-    result = await search(state["messages"][-1].text, state.get("filters"), state.get("access_scope"))
+    result = await search(_search_query(state), state.get("filters"), state.get("access_scope"))
     return {"context": result["chunks"], "failed_sources": result["failed_sources"]}
 
 
 async def generate(state: AgentState) -> dict:
     if not state["context"]:
-        return {"messages": [AIMessage(content=NO_RESULT_ANSWER)], "evidence": []}
+        return {"messages": [AIMessage(content=NO_EVIDENCE_ANSWER)], "evidence": []}
     response = await generate_answer(state["messages"][-1].text, state["context"], _history(state))
     answer, evidence = parse_answer(response, state["context"])
     # 다음 턴의 대화 기록에는 JSON이 아니라 답변만 남긴다
-    return {"messages": [AIMessage(content=answer)], "evidence": evidence}
+    update = {"messages": [AIMessage(content=answer)], "evidence": evidence}
+    if answer == NO_EVIDENCE_ANSWER:
+        # 쓰이지 않은 청크를 출처로 보여 주거나 다음 턴에 재사용하지 않는다
+        update["context"] = []
+    return update
 
 
 def _timed(name: str, step: Callable[[AgentState], Awaitable[dict]]) -> Callable[[AgentState], Awaitable[dict]]:

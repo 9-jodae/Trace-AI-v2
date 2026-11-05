@@ -123,5 +123,15 @@ class TestParseAnswer:
             parse_answer('{"answer": "비밀 본문', CONTEXT)
         assert "json_invalid" in caplog.text and "비밀" not in caplog.text
 
+    def test_no_evidence_answer_cannot_append_guesses(self):
+        response = '{"answer": "관련 문서를 찾지 못했습니다. 인사팀에 문의하세요.", "evidence": []}'
+        assert parse_answer(response, CONTEXT) == ("관련 문서를 찾지 못했습니다.", [])
+
+    def test_partial_answer_with_grounded_quote_is_kept(self):
+        answer = "관련 문서를 찾지 못했습니다. 다만 15일 기준은 있습니다."
+        response = '{"answer": "%s", "evidence": [{"chunk": 2, "quote": "%s"}]}' % (answer, QUOTE)
+        result, evidence = parse_answer(response, CONTEXT)
+        assert result == answer and len(evidence) == 1
+
     def test_answer_whitespace_is_trimmed(self):
         assert parse_answer('{"answer": "  답  "}', CONTEXT)[0] == "답"

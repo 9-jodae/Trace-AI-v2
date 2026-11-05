@@ -6,6 +6,7 @@ from pydantic import BaseModel, StrictInt, StringConstraints, ValidationError
 from typing_extensions import TypedDict
 
 from app.core.errors import AiUnavailableError
+from app.llm.client import NO_EVIDENCE_ANSWER
 from app.retrieval.schemas import Chunk
 
 logger = logging.getLogger(__name__)
@@ -93,4 +94,8 @@ def parse_answer(response: str, context: list[Chunk]) -> tuple[str, list[Evidenc
         # 응답 본문 대신 원인을 가를 수 있는 값만 남긴다
         logger.warning("LLM answer parse failed: %s length=%d", exc.errors()[0]["type"], len(body))
         raise AiUnavailableError("LLM 응답 형식이 올바르지 않습니다.") from exc
-    return candidate.answer, ground_evidence(_valid_candidates(candidate.evidence), context)
+    evidence = ground_evidence(_valid_candidates(candidate.evidence), context)
+    # 근거 없다고 답하면서 문의처 같은 추측을 덧붙이지 못하게 고정 문장으로 돌린다
+    if NO_EVIDENCE_ANSWER in candidate.answer and not evidence:
+        return NO_EVIDENCE_ANSWER, []
+    return candidate.answer, evidence
