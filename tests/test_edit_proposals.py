@@ -228,6 +228,7 @@ class TestAnswerRetry:
 
 def test_prompts_cover_counts_tables_and_quotes():
     assert "전체 수는 알 수 없고" in SYSTEM_PROMPT and '\\"' in SYSTEM_PROMPT
+    assert "직접 물을 때만" in SYSTEM_PROMPT and "언급하지 않는다" in SYSTEM_PROMPT
     assert "표는 그 행 전체" in EDIT_REQUEST_INSTRUCTION and "설명 문장" in EDIT_REQUEST_INSTRUCTION
 
 
