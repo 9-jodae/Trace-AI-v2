@@ -34,12 +34,17 @@ CONTEXT_REUSE_THRESHOLD = 0.7
 SMALL_TALK_THRESHOLD = 0.9
 # 잘못 판단해도 제안만 나가고 문서는 바뀌지 않는다. 일반 질문에 제안이 붙지 않게 높게 잡는다
 EDIT_REQUEST_THRESHOLD = 0.8
-# 값을 직접 바꾸라는 말은 판단 모델이 놓쳐도 제안으로 보낸다. "수정 방법이 뭐야" 같은 질문은 걸리지 않는다
-# "각 문서 간 충돌 찾아줘"처럼 주제 없이 문서 전체의 충돌을 묻는 말. "연차 이월 충돌이 뭐야?"는 해당하지 않는다
-CONFLICT_SCAN_PATTERN = re.compile(
-    r"(?=.*(문서|전체|모든|어떤|지금|발생))(?=.*(충돌|모순|불일치|상충|다르게|서로 다른|내용이 다른|값이 다른))"
-    r"(?=.*(있는지|있어|있나|찾아|알려|보여|확인|목록|어디))"
+# "각 문서 간 충돌 찾아줘"처럼 주제 없이 문서 전체의 충돌을 묻는 말만 찾는다. 낱말이 모두 아래 일반 표현이어야 한다
+CONFLICT_WORD_PATTERN = re.compile(r"충돌|모순|불일치|상충|서로 다른 (값|내용)|다르게 (기재|적)|다른 말로")
+CONFLICT_SCAN_GENERIC_WORDS = (
+    "여기", "지금", "현재", "남은", "전체", "모든", "모두", "각", "어떤",
+    "어느", "문서", "간", "사이", "서로", "같은", "내용", "다른", "다르게",
+    "말로", "값", "기재", "적", "발생", "충돌", "모순", "불일치", "상충",
+    "문제", "경고", "리뷰", "있는지", "있어", "있나", "있는", "있을", "있습니까",
+    "찾아", "알려", "보여", "확인", "목록", "어디", "뭐", "무엇", "좀",
+    "해줘", "해", "줘", "게",
 )
+# 값을 직접 바꾸라는 말은 판단 모델이 놓쳐도 제안으로 보낸다. "수정 방법이 뭐야" 같은 질문은 걸리지 않는다
 EDIT_REQUEST_PATTERN = re.compile(
     r"(수정|변경|반영|통일|해결|교체|정정)\s*(을|를)?\s*(해\s*(줘|주세요|주라|봐|라)|하자|부탁)"
     r"|(바꿔|고쳐|맞춰|바꾸어|고치어)\s*(줘|주세요|주라|봐|라)?\s*(줘|주세요|$|[.!])"
@@ -172,7 +177,11 @@ def _follows_clarification(state: AgentState) -> bool:
 
 
 def _is_conflict_scan(question: str) -> bool:
-    return CONFLICT_SCAN_PATTERN.match(question) is not None
+    if not CONFLICT_WORD_PATTERN.search(question):
+        return False
+    # 일반 표현 밖의 낱말이 있으면 "연차 이월 문서에 충돌 있어?"처럼 주제가 있는 질문이다
+    words = re.findall(r"[\w]+", question)
+    return all(word.startswith(CONFLICT_SCAN_GENERIC_WORDS) for word in words)
 
 
 def _search_query(state: AgentState) -> str:

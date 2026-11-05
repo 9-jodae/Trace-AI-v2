@@ -239,12 +239,25 @@ class TestConflictScan:
             "지금 발생한 문서 충돌 알려줘",
             "전체 문서에서 모순 찾아줘",
             "어떤 문서가 서로 다른 값인지 알려줘",
+            "남은 충돌 문제 있어?",
+            "지금 발생한 충돌/경고 내용 알려줘",
         ],
     )
     def test_overview_questions_match(self, text):
         assert graph._is_conflict_scan(text)
 
-    @pytest.mark.parametrize("text", ["연차 이월 충돌이 뭐야?", "연차 며칠이야?", "문서 몇 개야?", "안녕"])
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "연차 이월 충돌이 뭐야?",
+            "연차 며칠이야?",
+            "문서 몇 개야?",
+            "안녕",
+            "어떤 부서가 다르게 처리하는지 알려줘",
+            "지금 지역별로 요금이 다르게 적용되는지 알려줘",
+            "연차 이월 문서에 충돌 있어?",
+        ],
+    )
     def test_specific_questions_do_not_match(self, text):
         assert not graph._is_conflict_scan(text)
 
