@@ -10,7 +10,8 @@ from pypdf import PdfWriter
 
 import main
 from app.core import config
-from app.ingest import service
+from app.core.errors import AiUnavailableError
+from app.ingest import document_type, service
 from app.ingest.extraction import UnsupportedDocumentError, extract_text
 from app.ingest.router import IngestTasks
 from app.ingest.schemas import IngestRequest
@@ -66,8 +67,8 @@ class GraphStore:
 def results(monkeypatch):
     sent = []
 
-    async def send(job_id, status, error_message=None):
-        sent.append((status, error_message))
+    async def send(job_id, status, error_message=None, document_type=None):
+        sent.append((status, error_message) if document_type is None else (status, error_message, document_type))
 
     monkeypatch.setattr(service, "send_result", send)
     return sent
@@ -285,3 +286,113 @@ class TestCallback:
         assert len(attempts) == service.CALLBACK_ATTEMPTS
         assert str(attempts[0].url) == "http://spring:8080/api/internal/ingestion-jobs/job-1/result"
         assert attempts[0].headers["X-Internal-Secret"] == "s3cret"
+
+
+class TestDocumentType:
+    @pytest.fixture
+    def indexed(self, monkeypatch, results):
+        use_store(monkeypatch, VectorStore(info={"document_id": "d1", "title": "3분기 실적 보고"}))
+
+        async def read(key):
+            return SECRET_TEXT.encode()
+
+        async def index(document, **kwargs):
+            return [{"id": "c"}]
+
+        monkeypatch.setattr(service, "read_object", read)
+        monkeypatch.setattr(service, "index_document", index)
+        return results
+
+    def test_type_is_sent_with_done_when_enabled(self, monkeypatch, indexed):
+        monkeypatch.setenv("DOCUMENT_TYPE_ENABLED", "true")
+        seen = []
+
+        async def classify(title, text):
+            seen.append((title, text))
+            return "REPORT"
+
+        monkeypatch.setattr(service, "classify_document_type", classify)
+        run(make_request())
+        assert indexed == [("PROCESSING", None), ("DONE", None, "REPORT")]
+        assert seen == [("3분기 실적 보고", SECRET_TEXT)]
+
+    def test_disabled_does_not_call_llm(self, monkeypatch, indexed):
+        monkeypatch.delenv("DOCUMENT_TYPE_ENABLED", raising=False)
+
+        async def classify(title, text):
+            raise AssertionError("분류를 호출하면 안 된다")
+
+        monkeypatch.setattr(service, "classify_document_type", classify)
+        run(make_request())
+        assert indexed == [("PROCESSING", None), ("DONE", None)]
+
+    def test_unknown_type_is_left_out(self, monkeypatch, indexed):
+        monkeypatch.setenv("DOCUMENT_TYPE_ENABLED", "true")
+
+        async def classify(title, text):
+            return None
+
+        monkeypatch.setattr(service, "classify_document_type", classify)
+        run(make_request())
+        assert indexed == [("PROCESSING", None), ("DONE", None)]
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        ('{"documentType": "APPROVAL"}', "APPROVAL"),
+        ('설명 ```json\n{"documentType": "PRESENTATION"}\n```', "PRESENTATION"),
+        ('{"documentType": "report"}', None),
+        ('{"documentType": "MEMO"}', None),
+        ('{"type": "REPORT"}', None),
+        ("설명만 있음", None),
+    ],
+)
+def test_parse_document_type(reply, expected):
+    assert document_type.parse_document_type(reply) == expected
+
+
+def test_classification_sends_only_the_beginning(monkeypatch):
+    sent = []
+
+    async def respond(messages):
+        sent.append(messages[-1].content)
+        return '{"documentType": "HANDOVER"}'
+
+    monkeypatch.setattr(document_type, "generate_structured_response", respond)
+    assert asyncio.run(document_type.classify_document_type("인수인계", "가" * 5000)) == "HANDOVER"
+    assert sent[0].count("가") == document_type.MAX_INPUT_CHARACTERS
+
+
+def test_classification_failure_returns_none(monkeypatch):
+    async def fail(messages):
+        raise AiUnavailableError("실패")
+
+    monkeypatch.setattr(document_type, "generate_structured_response", fail)
+    assert asyncio.run(document_type.classify_document_type("제목", "본문")) is None
+
+
+def test_callback_includes_type_only_when_given(monkeypatch):
+    bodies = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, headers, json):
+            bodies.append(json)
+            return httpx.Response(200, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(service.httpx, "AsyncClient", Client)
+    asyncio.run(service.send_result("job", "DONE", document_type="REPORT"))
+    asyncio.run(service.send_result("job", "PROCESSING"))
+    assert bodies == [
+        {"status": "DONE", "errorMessage": None, "documentType": "REPORT"},
+        {"status": "PROCESSING", "errorMessage": None},
+    ]
