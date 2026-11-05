@@ -24,6 +24,8 @@ from app.retrieval.stores import (
 logger = logging.getLogger(__name__)
 
 SOURCE_LIMIT = 10
+# 그래프 후보가 이보다 적으면 전문 검색으로 보완한다
+FULLTEXT_FALLBACK_BELOW = 5
 # 권한 필터로 줄어들어도 SOURCE_LIMIT을 채울 수 있도록 그래프 후보를 더 가져온다
 GRAPH_CANDIDATE_LIMIT = 50
 CONTEXT_LIMIT = 5
@@ -100,19 +102,24 @@ async def search(
         return [chunk for chunk in candidates if chunk["id"] in accessible][:SOURCE_LIMIT]
 
     names = ["vector", "graph"]
-    results = await asyncio.gather(
-        search_vector(),
-        search_graph(),
-        return_exceptions=True,
-    )
+    results = await asyncio.gather(search_vector(), search_graph(), return_exceptions=True)
     rankings = []
     failed = []
+    graph_count = 0
     for name, result in zip(names, results):
         if isinstance(result, Exception):
             logger.error("%s search failed: %s", name, describe_exception(result))
             failed.append(name)
         else:
             rankings.append(result)
+            if name == "graph":
+                graph_count = len(result)
+    if graph_count < FULLTEXT_FALLBACK_BELOW:
+        try:
+            rankings.append(await vector_store.fulltext(query, SOURCE_LIMIT, scope, filters))
+        except Exception as exc:
+            logger.error("fulltext search failed: %s", describe_exception(exc))
+            failed.append("fulltext")
     if not rankings:
-        raise AiUnavailableError("벡터 DB와 그래프 DB 검색이 모두 실패했습니다.")
+        raise AiUnavailableError("벡터, 그래프, 전문 검색이 모두 실패했습니다.")
     return {"chunks": rrf_fuse(rankings, CONTEXT_LIMIT), "failed_sources": failed}

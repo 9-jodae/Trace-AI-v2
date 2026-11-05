@@ -19,6 +19,10 @@
 
 샘플 데이터를 켜지 않으면 `DATABASE_URL`(pgvector)이 필요합니다. 없으면 검색 경로는 503을 반환하며, 샘플로 대체하지 않습니다. 그래프 검색은 선택이라 `NEO4J_URI`를 비우면 벡터 검색만 씁니다. `NEO4J_URI`를 넣으면 `NEO4J_PASSWORD`도 필요합니다.
 
+검색은 벡터와 그래프를 동시에 조회하고, 그래프 후보가 5개 미만이면 PostgreSQL 전문 검색을 더해 RRF로 합칩니다. 전문 검색은 `simple` 설정이라 "연차는"처럼 조사가 붙은 단어는 "연차"와 맞지 않을 수 있습니다.
+
+벡터 검색은 pgvector cosine distance가 `VECTOR_MAX_COSINE_DISTANCE` 이하인 청크만 반환합니다. 기본값은 `0.55`(cosine similarity 0.45 이상)이며, 평가 데이터에 따라 조정할 수 있습니다. 값은 0~2 범위여야 하고, 잘못된 값이면 서버가 시작되지 않습니다.
+
 권한은 서버의 `accessible_chunks`와 `filter_accessible_chunk_ids`로 판단합니다. 그래프 검색 결과와 재사용할 이전 근거도 `filter_accessible_chunk_ids`를 거치므로, PostgreSQL이 멈추면 그래프 결과도 내보내지 않습니다.
 
 질문 요청의 `filters`는 서버의 9인자 `accessible_chunks`로 벡터 검색과 그래프 결과에 적용합니다. 필터가 있는 요청은 이전 근거를 재사용하지 않고 새로 검색합니다. 샘플 데이터에는 필터가 적용되지 않습니다.
