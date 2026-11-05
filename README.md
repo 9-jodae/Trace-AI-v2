@@ -4,6 +4,8 @@
 
 Python AI 서버는 FastAPI와 LangGraph로 검색과 답변 생성을 처리합니다.
 
+이 저장소는 `9-jodae/docs199-AI`에서 옮겨 왔습니다. 자세한 내용은 [저장소 이전 기록](docs/repo-migration.md)을 참고하세요.
+
 ## 로컬 실행
 
 자세한 내용은 [로컬 실행 안내](docs/local-setup.md)를 참고하세요.
