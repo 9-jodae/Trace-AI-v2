@@ -1,6 +1,7 @@
+import json
 import logging
 import re
-from typing import Annotated, Any
+from typing import Annotated, Any, NamedTuple
 
 from pydantic import BaseModel, StrictInt, StringConstraints, ValidationError
 from typing_extensions import TypedDict
@@ -12,7 +13,11 @@ from app.retrieval.schemas import Chunk
 logger = logging.getLogger(__name__)
 
 MAX_EVIDENCE = 3
-CODE_FENCE_PATTERN = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
+MIN_CLARIFICATION_OPTIONS = 2
+MAX_KEYWORDS = 3
+MAX_KEYWORD_LENGTH = 50
+ANSWER_OBJECT_PATTERN = re.compile(r'\{\s*"answer"\s*:')
+JSON_START_PATTERN = re.compile(r"\s*(```(?:json)?\s*)?\{")
 
 
 class EvidenceCandidate(BaseModel):
@@ -20,9 +25,26 @@ class EvidenceCandidate(BaseModel):
     quote: str
 
 
+class KeywordCandidate(BaseModel):
+    chunk: StrictInt
+    text: str
+
+
+class OptionCandidate(BaseModel):
+    label: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    chunk: StrictInt
+
+
 class AnswerCandidate(BaseModel):
     answer: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
     evidence: Any = None
+    keywords: Any = None
+    options: Any = None
+
+
+class Keyword(TypedDict):
+    chunk_id: str
+    text: str
 
 
 class Evidence(TypedDict):
@@ -79,23 +101,73 @@ def _valid_candidates(raw: Any) -> list[EvidenceCandidate]:
     return candidates
 
 
-def parse_answer(response: str, context: list[Chunk]) -> tuple[str, list[Evidence]]:
-    text = response.strip()
-    fenced = CODE_FENCE_PATTERN.match(text)
-    body = fenced.group(1) if fenced else text
-    if not body.startswith("{"):
+def ground_keywords(raw: Any, context: list[Chunk]) -> list[Keyword]:
+    # 인용과 같이 원문에 있는 문구만 내보낸다. 하나가 형식을 어겨도 나머지는 살린다
+    keywords: list[Keyword] = []
+    seen: set[str] = set()
+    for item in raw if isinstance(raw, list) else []:
+        try:
+            candidate = KeywordCandidate.model_validate(item)
+        except ValidationError:
+            continue
+        text = candidate.text.strip()
+        if not text or len(text) > MAX_KEYWORD_LENGTH or text in seen or not 1 <= candidate.chunk <= len(context):
+            continue
+        chunk = context[candidate.chunk - 1]
+        if text in chunk["text"]:
+            seen.add(text)
+            keywords.append({"chunk_id": chunk["id"], "text": text})
+    return keywords[:MAX_KEYWORDS]
+
+
+class ParsedAnswer(NamedTuple):
+    answer: str
+    evidence: list[Evidence]
+    clarification: bool
+    keywords: list[Keyword]
+
+
+def _is_valid_clarification(raw: Any, context: list[Chunk]) -> bool:
+    # 선택지가 실제 검색 결과의 서로 다른 청크를 가리킬 때만 되묻는 답변으로 인정한다
+    chunks = set()
+    for item in raw if isinstance(raw, list) else []:
+        try:
+            option = OptionCandidate.model_validate(item)
+        except ValidationError:
+            continue
+        if 1 <= option.chunk <= len(context):
+            chunks.add(option.chunk)
+    return len(chunks) >= MIN_CLARIFICATION_OPTIONS
+
+
+def _load_candidate(text: str) -> AnswerCandidate | None:
+    # 모델이 형식을 어기고 설명이나 코드 블록을 덧붙여도 JSON 답변을 찾아 쓴다. JSON이 없으면 None
+    match = ANSWER_OBJECT_PATTERN.search(text)
+    if match is None and not JSON_START_PATTERN.match(text):
+        return None
+    try:
+        if match is None:
+            raise ValueError("answer 없음")
+        # 답변 문자열 안의 실제 줄바꿈은 허용한다
+        data, _ = json.JSONDecoder(strict=False).raw_decode(text, match.start())
+        return AnswerCandidate.model_validate(data)
+    except ValueError as exc:
+        # 잘린 JSON이나 빈 답변을 사용자에게 그대로 보여 주지 않는다. 응답 본문은 기록하지 않는다
+        reason = exc.errors()[0]["type"] if isinstance(exc, ValidationError) else type(exc).__name__
+        logger.warning("LLM answer parse failed: %s length=%d", reason, len(text))
+        raise AiUnavailableError("LLM 응답 형식이 올바르지 않습니다.") from exc
+
+
+def parse_answer(response: str, context: list[Chunk]) -> ParsedAnswer:
+    candidate = _load_candidate(response)
+    if candidate is None:
         # 모델이 형식을 무시하고 글로 답하면 근거만 빼고 답변은 살린다. 응답 본문은 기록하지 않는다
         logger.warning("LLM answer is not in the expected format")
-        return response, []
-    try:
-        candidate = AnswerCandidate.model_validate_json(body)
-    except ValidationError as exc:
-        # 잘린 JSON이나 빈 답변을 사용자에게 그대로 보여 주지 않는다
-        # 응답 본문 대신 원인을 가를 수 있는 값만 남긴다
-        logger.warning("LLM answer parse failed: %s length=%d", exc.errors()[0]["type"], len(body))
-        raise AiUnavailableError("LLM 응답 형식이 올바르지 않습니다.") from exc
+        return ParsedAnswer(response, [], False, [])
     evidence = ground_evidence(_valid_candidates(candidate.evidence), context)
     # 근거 없다고 답하면서 문의처 같은 추측을 덧붙이지 못하게 고정 문장으로 돌린다
     if NO_EVIDENCE_ANSWER in candidate.answer and not evidence:
-        return NO_EVIDENCE_ANSWER, []
-    return candidate.answer, evidence
+        return ParsedAnswer(NO_EVIDENCE_ANSWER, [], False, [])
+    if _is_valid_clarification(candidate.options, context):
+        return ParsedAnswer(candidate.answer, [], True, [])
+    return ParsedAnswer(candidate.answer, evidence, False, ground_keywords(candidate.keywords, context))

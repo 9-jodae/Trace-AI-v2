@@ -35,8 +35,9 @@ python3 -m venv .venv
 | `EMBEDDING_MODEL` | `bedrock:amazon.titan-embed-text-v2:0` | 인스턴스 역할 사용 |
 | `EMBEDDING_DIMENSIONS` | `1024` | |
 | `BEDROCK_REGION` | `ap-northeast-1` | Titan과 답변 모델의 호출 리전. 서버의 기본 리전은 `ap-southeast-1`이고 그곳에는 Titan이 없어 따로 지정 |
-| `LLM_MODEL` | `bedrock:global.anthropic.claude-sonnet-5-5` | Haiku 권한이 열리지 않아 Sonnet 5.5 사용. `global.` 프로필은 요청을 다른 리전에서 처리할 수 있음 |
-| `JEV_API_KEY` | TypeSafe 키 | 기존 컨텍스트 재사용 판단에 사용. 질문과 청크 본문이 TypeSafe로 전송됨 |
+| `LLM_MODEL` | `bedrock:global.anthropic.claude-sonnet-5-5` | 문서 답변 모델. `global.` 프로필은 요청을 다른 리전에서 처리할 수 있음 |
+| `CHAT_LLM_MODEL` | `bedrock:global.anthropic.claude-haiku-4-5-20251001-v1:0` | 인사처럼 문서 없이 응대할 때 사용. 질문 문장만 전송. 전송 범위는 `docs199-Server#14`에서 합의 요청 중. 비우면 `LLM_MODEL` 사용 |
+| `JEV_API_KEY` | TypeSafe 키 | 일상 대화 판단과 기존 컨텍스트 재사용 판단에 사용. 모든 질문이 TypeSafe로 전송되고 재사용 판단 때는 청크 본문도 전송됨 |
 | `VECTOR_MAX_COSINE_DISTANCE` | `0.85` | 측정 근거는 로컬 실행 안내 참고 |
 | `NEO4J_URI` | 비움 | 값을 넣으면 인덱스가 없어 그래프 검색이 실패로 표시됨. PR #39와 Neo4j 적재 후 사용 |
 

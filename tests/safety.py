@@ -17,6 +17,7 @@ FAKE_ENV = {
     "LLM_API_KEY": "fake-llm-key",
     "LLM_MODEL": "fake:fake-llm",
     "LLM_FALLBACK_MODEL": "",
+    "CHAT_LLM_MODEL": "",
     "DATABASE_URL": "",
     "VECTOR_MAX_COSINE_DISTANCE": "",
     "DB_POOL_MAX_SIZE": "",
