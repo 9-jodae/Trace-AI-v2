@@ -154,6 +154,19 @@ class PostgresVectorStore:
                 )
 
 
+class NoGraphStore:
+    """NEO4J_URI를 비워 벡터 검색만 쓸 때의 그래프 저장소."""
+
+    async def close(self) -> None:
+        pass
+
+    async def search(self, query: str, limit: int) -> list[Chunk]:
+        return []
+
+    async def replace_version(self, version_id: str, document_id: str, document: dict, chunks: list[Chunk]) -> None:
+        pass
+
+
 class SampleVectorStore:
     def __init__(self) -> None:
         self._embeddings: list[list[float]] | None = None

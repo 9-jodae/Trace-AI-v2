@@ -14,6 +14,7 @@ from app.retrieval.schemas import Chunk
 from app.retrieval.stores import (
     CHUNK_EMBEDDING_DIMENSIONS,
     GraphStore,
+    NoGraphStore,
     PostgresVectorStore,
     SampleGraphStore,
     SampleVectorStore,
@@ -39,19 +40,19 @@ def _sample_stores() -> tuple[VectorStore, GraphStore]:
 
 
 @cache
-def _real_stores(database_url: str, neo4j_settings: tuple) -> tuple[VectorStore, GraphStore]:
-    return PostgresVectorStore(database_url), Neo4jGraphStore.from_uri(*neo4j_settings)
+def _real_stores(database_url: str, neo4j_settings: tuple | None) -> tuple[VectorStore, GraphStore]:
+    graph_store = Neo4jGraphStore.from_uri(*neo4j_settings) if neo4j_settings else NoGraphStore()
+    return PostgresVectorStore(database_url), graph_store
 
 
 def get_real_stores() -> tuple[VectorStore, GraphStore]:
-    if not config.database_url() or not config.neo4j_uri() or not config.neo4j_password():
+    # 그래프는 선택이다. NEO4J_URI를 비우면 벡터 검색만 쓴다
+    if not config.database_url() or (config.neo4j_uri() and not config.neo4j_password()):
         raise AiUnavailableError("운영 저장소 설정이 없습니다.")
     if config.embedding_dimensions() != CHUNK_EMBEDDING_DIMENSIONS:
         raise AiUnavailableError(f"EMBEDDING_DIMENSIONS는 {CHUNK_EMBEDDING_DIMENSIONS}이어야 합니다.")
-    return _real_stores(
-        config.database_url(),
-        (config.neo4j_uri(), config.neo4j_user(), config.neo4j_password(), config.neo4j_database()),
-    )
+    neo4j_settings = (config.neo4j_uri(), config.neo4j_user(), config.neo4j_password(), config.neo4j_database())
+    return _real_stores(config.database_url(), neo4j_settings if config.neo4j_uri() else None)
 
 
 def get_stores() -> tuple[VectorStore, GraphStore]:

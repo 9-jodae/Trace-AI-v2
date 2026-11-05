@@ -1,5 +1,7 @@
 import asyncio
+import json
 
+import httpx
 import pytest
 
 from app.core.errors import AiUnavailableError
@@ -64,7 +66,7 @@ def test_bedrock_uses_aws_credentials_and_model_kwargs(monkeypatch, init):
     monkeypatch.setenv("EMBEDDING_MODEL", "bedrock:amazon.titan-embed-text-v2:0")
     monkeypatch.setenv("EMBEDDING_API_KEY", "")
     asyncio.run(embedding.embed_query("질문"))
-    assert init == [("bedrock:amazon.titan-embed-text-v2:0", {"model_kwargs": {"dimensions": 1024}})]
+    assert init == [("bedrock:amazon.titan-embed-text-v2:0", {"model_kwargs": {"dimensions": 1024, "normalize": True}})]
 
 
 def test_query_with_wrong_dimensions_is_rejected(init, monkeypatch):
@@ -137,7 +139,7 @@ class TestDocumentBatches:
         assert len(embedder.batches) == embedding.BATCH_ATTEMPTS
 
     def test_timeout_applies_per_batch_and_is_retried(self, embedder, monkeypatch):
-        monkeypatch.setattr(embedding, "TIMEOUT_SECONDS", 0.01)
+        monkeypatch.setattr(embedding, "BATCH_TIMEOUT_SECONDS", 0.01)
         embedder.failures = ["hang"]
         assert len(asyncio.run(embedding.embed_documents(self.texts(2)))) == 2
         assert len(embedder.batches) == 2
@@ -232,3 +234,71 @@ class TestQueryCache:
             asyncio.run(embedding.embed_query("q"))
         assert not embedding._query_cache
 
+
+class TestProxy:
+    URL = "http://localhost:18880/api/internal/embeddings"
+
+    @pytest.fixture
+    def proxy(self, monkeypatch):
+        state = {"requests": [], "status": 200, "extra": []}
+        real_client = httpx.AsyncClient
+
+        def handler(request):
+            body = json.loads(request.content)
+            state["requests"].append((str(request.url), request.headers.get("X-Internal-Secret"), body["texts"]))
+            vectors = [[0.5] * 1024 for _ in body["texts"]] + state["extra"]
+            return httpx.Response(state["status"], json={"dimensions": 1024, "embeddings": vectors})
+
+        monkeypatch.setenv("EMBEDDING_PROXY_URL", self.URL)
+        monkeypatch.setenv("INTERNAL_SECRET", "fake-secret")
+        monkeypatch.setattr(
+            embedding.httpx,
+            "AsyncClient",
+            lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
+        )
+        embedding._query_cache.clear()
+        return state
+
+    def test_query_sends_secret_header_and_text(self, proxy):
+        assert len(asyncio.run(embedding.embed_query("질문"))) == 1024
+        assert proxy["requests"] == [(self.URL, "fake-secret", ["질문"])]
+
+    def test_documents_are_split_to_proxy_limit(self, proxy):
+        vectors = asyncio.run(embedding.embed_documents([f"t{i}" for i in range(33)]))
+        assert len(vectors) == 33
+        assert [len(request[2]) for request in proxy["requests"]] == [32, 1]
+
+    def test_batch_size_fits_proxy_limit(self):
+        assert embedding.BATCH_SIZE <= 32
+
+    def test_error_status_raises_without_secret_in_message(self, proxy):
+        proxy["status"] = 503
+        with pytest.raises(httpx.HTTPStatusError) as error:
+            asyncio.run(embedding.embed_query("질문"))
+        assert "fake-secret" not in str(error.value)
+
+    def test_count_mismatch_is_rejected(self, proxy):
+        proxy["extra"] = [[0.5] * 1024]
+        with pytest.raises(AiUnavailableError):
+            asyncio.run(embedding.embed_documents(["a"]))
+
+    def test_wrong_dimensions_are_rejected(self, monkeypatch):
+        async def short(self, texts):
+            return [[0.5]]
+
+        monkeypatch.setenv("EMBEDDING_PROXY_URL", self.URL)
+        monkeypatch.setenv("INTERNAL_SECRET", "fake-secret")
+        monkeypatch.setattr(embedding.ProxyEmbedder, "aembed_documents", short)
+        with pytest.raises(AiUnavailableError):
+            asyncio.run(embedding.embed_documents(["a"]))
+
+    def test_missing_secret_fails_before_sending(self, monkeypatch):
+        monkeypatch.setenv("EMBEDDING_PROXY_URL", self.URL)
+        monkeypatch.setenv("INTERNAL_SECRET", "")
+        with pytest.raises(AiUnavailableError):
+            asyncio.run(embedding.embed_query("질문"))
+
+    def test_production_ignores_proxy(self, monkeypatch):
+        monkeypatch.setenv("APP_ENV", "production")
+        monkeypatch.setenv("EMBEDDING_PROXY_URL", self.URL)
+        assert embedding.config.embedding_proxy_url() is None

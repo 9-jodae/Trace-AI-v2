@@ -20,5 +20,5 @@
 - `/ingest` 요청·콜백 필드와 원본 파일 전달 방식
 - 대화 맥락 복원을 위한 `conversationId`와 이전 메시지 전달 방식
 - 질문 길이 제한. 현재 2,000자는 임시값입니다.
-- 답변 LLM의 Bedrock 모델
+- 답변 LLM의 Bedrock 모델 ID. 백엔드 안내 후보는 Haiku 4.5, Sonnet 5.5입니다.
 

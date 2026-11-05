@@ -17,7 +17,7 @@
 | 샘플 데이터 | `USE_SAMPLE_DATA=true`일 때만 사용 | 사용 불가. 설정하면 서버가 시작되지 않음 |
 | `python main.py` | `127.0.0.1`, 코드 변경 시 자동 재시작 | `0.0.0.0`, 자동 재시작 없음 |
 
-샘플 데이터를 켜지 않으면 `DATABASE_URL`(pgvector)과 Neo4j 접속 정보가 필요합니다. 없으면 검색 경로는 503을 반환하며, 샘플로 대체하지 않습니다.
+샘플 데이터를 켜지 않으면 `DATABASE_URL`(pgvector)이 필요합니다. 없으면 검색 경로는 503을 반환하며, 샘플로 대체하지 않습니다. 그래프 검색은 선택이라 `NEO4J_URI`를 비우면 벡터 검색만 씁니다. `NEO4J_URI`를 넣으면 `NEO4J_PASSWORD`도 필요합니다.
 
 권한은 서버의 `accessible_chunks`와 `filter_accessible_chunk_ids`로 판단합니다. 그래프 검색 결과와 재사용할 이전 근거도 `filter_accessible_chunk_ids`를 거치므로, PostgreSQL이 멈추면 그래프 결과도 내보내지 않습니다.
 
@@ -29,7 +29,9 @@ JSON 문서는 `python -m app.retrieval.indexing <파일>`로 적재합니다. �
 
 대화는 메모리에 저장하며 대화당 최근 메시지 6개와 컨텍스트만 보관합니다. 기본값은 최대 1,000개 대화, 1시간이고 `MAX_CONVERSATIONS`, `CONVERSATION_TTL_SECONDS`로 바꿀 수 있습니다. 서버를 재시작하면 사라집니다.
 
-임베딩과 LLM을 Bedrock으로 쓰면 API 키 없이 AWS 자격 증명과 `AWS_REGION`을 사용합니다.
+임베딩과 LLM을 Bedrock으로 쓰면 API 키 없이 AWS 자격 증명과 `AWS_REGION`을 사용합니다. 임베딩은 질문과 문서 모두 Titan v2, 1024차원, `normalize=true`로 맞춥니다.
+
+노트북에서는 `EMBEDDING_PROXY_URL`로 서버의 임시 임베딩 중계를 쓸 수 있습니다. `INTERNAL_SECRET` 값을 `X-Internal-Secret` 헤더로 보내고, 평문이 공개망을 지나지 않도록 SSH 터널(`-L 18880:localhost:18080`) 주소를 씁니다. 운영 환경에서는 이 설정을 무시합니다. 문서 일괄 적재는 팀 서버에서 직접 실행하는 것을 권장합니다.
 
 ## 운영 DB 연결
 

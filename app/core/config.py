@@ -94,6 +94,11 @@ def embedding_model() -> str | None:
     return os.getenv("EMBEDDING_MODEL") or None
 
 
+def embedding_proxy_url() -> str | None:
+    # 노트북 개발 중 Titan을 쓰기 위한 임시 중계. 서버에서는 인스턴스 권한으로 직접 호출한다
+    return None if is_production() else os.getenv("EMBEDDING_PROXY_URL") or None
+
+
 def embedding_dimensions() -> int:
     return int(os.getenv("EMBEDDING_DIMENSIONS") or DEFAULT_EMBEDDING_DIMENSIONS)
 

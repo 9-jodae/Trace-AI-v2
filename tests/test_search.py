@@ -11,6 +11,7 @@ from app.core.schemas import AccessScope, SearchFilters
 from app.retrieval import service
 
 SCOPE = AccessScope("dept", "STAFF", "INTERNAL", False)
+SCOPE_FROM_ENV = AccessScope(None, None, "INTERNAL", False)
 
 
 class FakeStore:
@@ -129,8 +130,8 @@ def test_sample_stores_require_explicit_setting(monkeypatch):
 def test_database_url_alone_does_not_enable_samples(monkeypatch):
     monkeypatch.setenv("USE_SAMPLE_DATA", "")
     monkeypatch.setenv("DATABASE_URL", "postgresql://db")
-    with pytest.raises(AiUnavailableError):
-        service.get_stores()
+    assert type(service.get_stores()[0]).__name__ == "PostgresVectorStore"
+    service._real_stores.cache_clear()
 
 
 def test_missing_stores_fail_before_paying_for_embedding(monkeypatch):
@@ -174,10 +175,29 @@ class TestRealStoreSelection:
         with pytest.raises(AiUnavailableError):
             service.get_stores()
 
-    def test_missing_neo4j_fails(self, monkeypatch):
+    def test_missing_neo4j_uses_vector_only(self, monkeypatch):
         monkeypatch.setenv("DATABASE_URL", "postgresql://db")
+        vector, graph = service.get_stores()
+        assert type(vector).__name__ == "PostgresVectorStore" and type(graph).__name__ == "NoGraphStore"
+        assert asyncio.run(graph.search("질문", 3)) == []
+
+    def test_neo4j_uri_without_password_fails(self, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://db")
+        monkeypatch.setenv("NEO4J_URI", "bolt://localhost:7687")
         with pytest.raises(AiUnavailableError):
             service.get_stores()
+
+    def test_vector_only_search_reports_no_failure(self, monkeypatch):
+        async def embed(query):
+            return [0.1]
+
+        monkeypatch.setenv("ACCESS_CLEARANCE", "INTERNAL")
+        vector = FakeStore([chunk("a")])
+        monkeypatch.setattr(service, "get_stores", lambda: (vector, service.NoGraphStore()))
+        monkeypatch.setattr(service, "embed_query", embed)
+        result = asyncio.run(service.search("질문"))
+        assert result == {"chunks": [chunk("a")], "failed_sources": []}
+        assert vector.filter_calls == [([], SCOPE_FROM_ENV, None)]
 
     def test_close_stores_closes_both(self, monkeypatch, neo4j):
         closed = []
