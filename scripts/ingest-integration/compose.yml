@@ -1,0 +1,53 @@
+# 재적재 격리 시험 전용. 시험 값이며 데이터는 메모리에만 있다. PostgreSQL과 Neo4j는 docs199-Server compose와 같은 버전이다
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg18
+    environment:
+      POSTGRES_DB: docs199_ingest_test
+      POSTGRES_USER: ingest_test
+      POSTGRES_PASSWORD: ingest_test_only_password
+    ports:
+      - "127.0.0.1:15433:5432"
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ingest_test -d docs199_ingest_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  neo4j:
+    image: neo4j:2026.10.1-community
+    environment:
+      NEO4J_AUTH: neo4j/ingest_test_only_password
+      NEO4J_server_memory_heap_initial__size: 128m
+      NEO4J_server_memory_heap_max__size: 256m
+    ports:
+      - "127.0.0.1:17688:7687"
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ingest_test_only_password 'RETURN 1' >/dev/null 2>&1"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  minio:
+    build:
+      context: .
+      dockerfile: minio.Dockerfile
+    image: docs199/ingest-minio-test:local
+    pull_policy: build
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ingesttest
+      MINIO_ROOT_PASSWORD: ingest_test_only_password
+    ports:
+      - "127.0.0.1:19000:9000"
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:9000/minio/health/live"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

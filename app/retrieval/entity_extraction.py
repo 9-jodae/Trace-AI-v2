@@ -21,6 +21,8 @@ from app.retrieval.schemas import (
 logger = logging.getLogger(__name__)
 
 NAMESPACE_ID = "docs199"
+# 청크마다 인용을 되풀이해 답변 기본값으로는 JSON이 잘린다. 잘리면 그 청크의 결과를 모두 잃는다
+EXTRACTION_MAX_OUTPUT_TOKENS = 4096
 
 
 class _StrictModel(BaseModel):
@@ -68,6 +70,7 @@ async def extract_entity_graph(document_id: str, version_id: str, chunks: list[C
     """원문 근거를 검증한 Entity 언급과 업무 관계 후보를 만든다."""
     mentions: list[Mention] = []
     assertions: list[RelationAssertion] = []
+    skipped = 0
     for chunk in chunks:
         chunk_mentions: list[Mention] = []
         payload = json.dumps({"text": chunk["text"]}, ensure_ascii=False)
@@ -76,6 +79,14 @@ async def extract_entity_graph(document_id: str, version_id: str, chunks: list[C
             "Entity는 PROJECT, PROCESS, SYSTEM_SERVICE, ORG_UNIT, POLICY, CONCEPT 중 하나만 쓴다. "
             "사람은 제외한다. 표면형과 인용은 원문 그대로 사용한다. "
             "관계는 명시적 근거가 있을 때만 RESPONSIBLE_FOR, USES, GOVERNED_BY로 추출한다. "
+            "부서나 팀이 업무를 맡는다고(담당, 책임, 관리, 주관) 적혀 있으면 RESPONSIBLE_FOR로 추출한다. "
+            "업무나 조직이 시스템이나 도구를 쓴다고(사용, 이용, 기록) 적혀 있으면 USES로 추출한다. "
+            "업무가 규정이나 지침을 따른다고(따른다, 준수, 근거, 기준) 적혀 있으면 GOVERNED_BY로 추출한다. "
+            "해당 문장이 있으면 빠뜨리지 않는다. 주어와 목적어는 mentions에도 같은 이름으로 넣는다. "
+            "'소유 부서', '담당자'처럼 실제 이름이 아닌 일반 표현은 관계의 주어로 쓰지 않는다. "
+            "polarity는 AFFIRMED, NEGATED, UNKNOWN 중 하나만 쓴다. "
+            "modality는 ACTUAL, PLANNED, CONDITIONAL, UNKNOWN 중 하나만 쓴다. "
+            "condition_quote는 조건이 없으면 null로 쓴다. "
             "단순 공동 등장으로 관계를 만들지 않는다. 긍정/부정과 실제/예정/조건부를 구분한다. "
             "근거가 없거나 불확실한 후보는 생략한다. "
             "형식: {mentions:[{entity_type,canonical_name,surface_form,quote}], "
@@ -84,10 +95,14 @@ async def extract_entity_graph(document_id: str, version_id: str, chunks: list[C
         )
         # 청크 하나의 추출이 실패해도 적재와 참조 갱신은 끝까지 진행한다. 응답 본문은 기록하지 않는다
         try:
-            raw = await generate_structured_response([SystemMessage(content=prompt), HumanMessage(content=payload)])
+            raw = await generate_structured_response(
+                [SystemMessage(content=prompt), HumanMessage(content=payload)],
+                max_tokens=EXTRACTION_MAX_OUTPUT_TOKENS,
+            )
             parsed = _parse_extraction(raw)
         except (AiUnavailableError, ValueError, ValidationError) as exc:
             logger.warning("Entity extraction skipped a chunk: %s", type(exc).__name__)
+            skipped += 1
             continue
         mention_lookup: dict[tuple[str, str], str] = {}
         for candidate in parsed.mentions:
@@ -139,6 +154,9 @@ async def extract_entity_graph(document_id: str, version_id: str, chunks: list[C
                 }
                 if validate_assertion(assertion, {chunk["id"]: chunk}):
                     assertions.append(assertion)
+    if skipped:
+        # 호출자가 이전 버전의 그래프를 이 결과로 교체하므로 일부 누락을 문서 단위로도 남긴다
+        logger.warning("Entity extraction incomplete: document=%s skipped=%d/%d", document_id, skipped, len(chunks))
     mentions = list({item["mention_id"]: item for item in mentions}.values())
     assertions = list({item["assertion_id"]: item for item in assertions}.values())
     return mentions, assertions
