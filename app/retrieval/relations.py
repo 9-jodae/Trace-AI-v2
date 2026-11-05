@@ -76,6 +76,13 @@ def document_names(document: DocumentInput) -> list[str]:
     return list(dict.fromkeys(normalized for name in names if (normalized := normalize_name(name))))
 
 
+def _reference_names(document: DocumentInput) -> list[str]:
+    # 본문은 파일 이름과 다른 실제 제목으로 서로를 가리킨다. 첫 줄 제목은 대조에만 쓰고 저장하지 않는다
+    first_line = next((line for line in document["text"].splitlines() if line.strip()), "").lstrip("# ").strip()
+    title = [normalize_name(first_line)] if 0 < len(first_line) <= MAX_DOCUMENT_NAME_LENGTH else []
+    return list(dict.fromkeys([*document_names(document), *title]))
+
+
 def _chunk_at(chunks: list[Chunk], position: int) -> Chunk | None:
     return next((chunk for chunk in chunks if chunk["char_start"] <= position < chunk["char_end"]), None)
 
@@ -86,7 +93,7 @@ def resolve_references(
     """문서 본문에 명시된 참조만 연결하고, 모호한 이름은 건너뛴다."""
     targets: dict[str, set[str]] = {}
     for candidate in documents:
-        for name in document_names(candidate):
+        for name in _reference_names(candidate):
             targets.setdefault(name, set()).add(candidate["document_id"])
 
     links: dict[str, DocumentReference] = {}

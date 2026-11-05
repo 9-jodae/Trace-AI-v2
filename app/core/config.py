@@ -70,8 +70,8 @@ def entity_extraction_enabled() -> bool:
 
 
 def graph_search_enabled() -> bool:
-    """Neo4j를 질문 검색에도 쓸지 정한다. 주제 간선만 쓸 때는 끈다."""
-    return os.getenv("GRAPH_SEARCH_ENABLED", "").strip().lower() == "true"
+    """Neo4j를 연결하면 질문 검색에도 쓴다. 장애나 측정 때 false로 끌 수 있다."""
+    return os.getenv("GRAPH_SEARCH_ENABLED", "").strip().lower() != "false"
 
 
 def document_topics_enabled() -> bool:

@@ -46,3 +46,13 @@ def test_reference_match_is_normalized_and_does_not_guess_substring():
     chunks = chunk_document("a", "a-v1", source["text"], source["source"])
     links = resolve_references(source, chunks, [source, target])
     assert [link["target_document_id"] for link in links] == ["b"]
+
+
+def test_first_line_title_resolves_reference_without_being_stored():
+    source = document("a", "travel-policy", "출장비 규정\n결재는 《경비 결재 절차》 제3조를 따른다.")
+    target = document("b", "expense-approval", "경비 결재 절차\n팀장이 승인한다.")
+    chunks = chunk_document("a", "a-v1", source["text"], source["source"])
+    links = resolve_references(source, chunks, [source, target])
+    assert [link["target_document_id"] for link in links] == ["b"]
+    assert document_names(target) == ["expense-approval"]
+

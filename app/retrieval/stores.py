@@ -75,6 +75,16 @@ JOIN documents d ON d.id = dv.document_id
 WHERE c.embedding IS NOT NULL AND c.embedding <=> %s::vector <= %s
 ORDER BY r.ordinality
 """
+NEAREST_ACCESSIBLE_SQL = """
+SELECT c.id::text AS id, c.content AS text, d.title AS source, dv.document_id::text AS document_id,
+       c.document_version_id::text AS version_id, c.char_start, c.char_end
+FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
+JOIN document_versions dv ON dv.id = c.document_version_id
+JOIN documents d ON d.id = dv.document_id
+WHERE c.id = ANY(%s::uuid[]) AND c.embedding IS NOT NULL
+ORDER BY c.embedding <=> %s::vector
+LIMIT %s
+"""
 ACCESSIBLE_DOCUMENT_IDS_SQL = """
 SELECT DISTINCT dv.document_id::text AS id
 FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
@@ -149,6 +159,15 @@ class VectorStore(Protocol):
         self, document_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
     ) -> set[str]: ...
 
+    async def nearest_accessible(
+        self,
+        chunk_ids: list[str],
+        scope: AccessScope | None,
+        filters: SearchFilters | None,
+        embedding: list[float],
+        limit: int,
+    ) -> list[Chunk]: ...
+
 
 class GraphStore(Protocol):
     # 그래프에는 본문과 권한을 두지 않는다. 반환한 ID를 VectorStore.fetch_accessible로 읽는다
@@ -157,6 +176,10 @@ class GraphStore(Protocol):
     async def search_from_documents(self, document_ids: list[str], limit: int) -> list[str]: ...
 
     async def search_from_entities(self, query: str, limit: int) -> list[str]: ...
+
+    async def follow_references(self, document_ids: list[str]) -> list[str]: ...
+
+    async def document_chunks(self, document_ids: list[str]) -> list[str]: ...
 
     async def list_document_catalog(self) -> list[dict[str, str]]: ...
 
@@ -284,6 +307,19 @@ class PostgresVectorStore:
         rows = await self._read(ACCESSIBLE_DOCUMENT_IDS_SQL, (*scope, *_filter_params(filters), document_ids))
         return {row["id"] for row in rows}
 
+    async def nearest_accessible(
+        self,
+        chunk_ids: list[str],
+        scope: AccessScope | None,
+        filters: SearchFilters | None,
+        embedding: list[float],
+        limit: int,
+    ) -> list[Chunk]:
+        if scope is None or not chunk_ids:
+            return []
+        params = (*scope, *_filter_params(filters), chunk_ids, _to_vector(embedding), limit)
+        return await self._read(NEAREST_ACCESSIBLE_SQL, params)
+
     async def is_current_version(self, version_id: str) -> bool:
         return bool(await self._read(IS_CURRENT_VERSION_SQL, (version_id,)))
 
@@ -331,6 +367,12 @@ class NoGraphStore:
         pass
 
     async def search_from_entities(self, query: str, limit: int) -> list[str]:
+        return []
+
+    async def follow_references(self, document_ids: list[str]) -> list[str]:
+        return []
+
+    async def document_chunks(self, document_ids: list[str]) -> list[str]:
         return []
     async def seed_documents(self, query: str) -> list[str]:
         return []
@@ -401,9 +443,25 @@ class SampleVectorStore:
         # 샘플 저장소에는 권한 메타데이터가 없으며 USE_SAMPLE_DATA가 명시된 로컬 데모에서만 사용한다.
         return set(document_ids)
 
+    async def nearest_accessible(
+        self,
+        chunk_ids: list[str],
+        scope: AccessScope | None,
+        filters: SearchFilters | None,
+        embedding: list[float],
+        limit: int,
+    ) -> list[Chunk]:
+        return (await self.fetch_accessible(chunk_ids, scope, filters))[:limit]
+
 
 class SampleGraphStore:
     async def search_from_entities(self, query: str, limit: int) -> list[str]:
+        return []
+
+    async def follow_references(self, document_ids: list[str]) -> list[str]:
+        return []
+
+    async def document_chunks(self, document_ids: list[str]) -> list[str]:
         return []
     async def seed_documents(self, query: str) -> list[str]:
         normalized = "".join(query.split()).casefold()
