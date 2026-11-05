@@ -121,7 +121,7 @@ class TestParseAnswer:
     def test_parse_failure_log_has_no_content(self, caplog):
         with pytest.raises(AiUnavailableError):
             parse_answer('{"answer": "비밀 본문', CONTEXT)
-        assert "json_invalid" in caplog.text and "비밀" not in caplog.text
+        assert "LLM answer parse failed" in caplog.text and "비밀" not in caplog.text
 
     def test_no_evidence_answer_cannot_append_guesses(self):
         response = '{"answer": "관련 문서를 찾지 못했습니다. 인사팀에 문의하세요.", "evidence": []}'
@@ -132,6 +132,22 @@ class TestParseAnswer:
         response = '{"answer": "%s", "evidence": [{"chunk": 2, "quote": "%s"}]}' % (answer, QUOTE)
         result, evidence = parse_answer(response, CONTEXT)
         assert result == answer and len(evidence) == 1
+
+    def test_text_before_fenced_json_is_not_shown(self):
+        body = '{"answer": "최종 답", "evidence": [{"chunk": 2, "quote": "%s"}]}' % QUOTE
+        response = f"설명 문장입니다.\n\n```json\n{body}\n```"
+        answer, evidence = parse_answer(response, CONTEXT)
+        assert answer == "최종 답" and [item["quote"] for item in evidence] == [QUOTE]
+
+    def test_text_around_json_without_fence_is_dropped(self):
+        assert parse_answer('앞 {"answer": "답"} 뒤', CONTEXT) == ("답", [])
+
+    def test_truncated_json_after_text_is_not_shown(self):
+        with pytest.raises(AiUnavailableError):
+            parse_answer('설명\n{"answer": "잘린', CONTEXT)
+
+    def test_real_newline_in_answer_is_accepted(self):
+        assert parse_answer('{"answer": "첫 줄\n둘째 줄"}', CONTEXT)[0] == "첫 줄\n둘째 줄"
 
     def test_answer_whitespace_is_trimmed(self):
         assert parse_answer('{"answer": "  답  "}', CONTEXT)[0] == "답"
