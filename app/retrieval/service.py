@@ -98,6 +98,9 @@ async def search(
         return await vector_store.search(await query_embedding, SOURCE_LIMIT, scope, filters)
 
     async def search_graph() -> list[Chunk]:
+        # 주제 간선 때문에 Neo4j를 연결해도 측정 전에는 검색 결과를 바꾸지 않는다
+        if isinstance(graph_store, Neo4jGraphStore) and not config.graph_search_enabled():
+            return []
         # Neo4j 제목 매칭 결과를 먼저 PostgreSQL에서 허용된 현재 문서인지 확인한 뒤에만 관계를 확장한다.
         seed_ids = await graph_store.seed_documents(query)
         # 엔티티 경로는 청크 ID를 돌려주므로 문서 시작점에 섞지 않고 후보에 바로 넣는다

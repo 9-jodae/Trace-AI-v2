@@ -110,6 +110,21 @@ class TestGenerateAnswer:
         system = model.messages[0].content
         assert '"evidence"' in system and "그대로 복사" in system
 
+    def test_system_prompt_sets_answer_style(self):
+        assert "첫 문장에 질문의 답" in llm.SYSTEM_PROMPT and "확인되지 않음:" in llm.SYSTEM_PROMPT
+        assert llm.NO_EVIDENCE_ANSWER in llm.SYSTEM_PROMPT
+
+    def test_system_prompt_sets_clarification_rules(self):
+        assert "애매하면 되묻지 말고 답한다" in llm.SYSTEM_PROMPT and '"options"' in llm.SYSTEM_PROMPT
+
+    def test_prompt_allows_clarification_by_default(self, model):
+        run(history=[AIMessage(content="이전 답")])
+        assert llm.NO_REPEAT_CLARIFICATION not in model.messages[-1].content
+
+    def test_prompt_blocks_repeated_clarification(self, model):
+        run(history=[AIMessage(content="어느 쪽?", additional_kwargs={llm.CLARIFICATION_KEY: True})])
+        assert llm.NO_REPEAT_CLARIFICATION in model.messages[-1].content
+
     def test_system_prompt_guards(self, model):
         run()
         system = model.messages[0].content
@@ -258,3 +273,58 @@ class TestClientReuse:
         run()
         assert calls == ["fake:fake-llm", "fake:backup"]
 
+
+class TestReplyWithoutDocuments:
+    @pytest.fixture
+    def models(self, monkeypatch):
+        calls = []
+        replies = []
+
+        async def invoke(model_name, messages):
+            calls.append((model_name, messages))
+            reply = replies.pop(0)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+        monkeypatch.setattr(llm, "_invoke", invoke)
+        monkeypatch.setenv("CHAT_LLM_MODEL", "fake:chat")
+        return calls, replies
+
+    def test_uses_chat_model_without_history(self, models):
+        calls, replies = models
+        replies.append('{"answer": " 안녕하세요! ", "clarification": false}')
+        assert asyncio.run(llm.generate_reply_without_documents("안녕?")) == ("안녕하세요!", False)
+        assert calls[0][0] == "fake:chat" and len(calls[0][1]) == 2 and calls[0][1][-1].content == "안녕?"
+
+    def test_falls_back_to_answer_model(self, models):
+        calls, replies = models
+        replies.extend([RuntimeError("권한 없음"), "안녕하세요!"])
+        assert asyncio.run(llm.generate_reply_without_documents("안녕?")) == ("안녕하세요!", False)
+        assert [call[0] for call in calls] == ["fake:chat", "fake:fake-llm"]
+
+    def test_refusal_is_normalized(self, models):
+        _, replies = models
+        replies.append(f"죄송합니다. {llm.NO_EVIDENCE_ANSWER} 인사팀에 문의하세요.")
+        assert asyncio.run(llm.generate_reply_without_documents("점심 추천")) == (llm.NO_EVIDENCE_ANSWER, False)
+
+    def test_clarification_is_marked(self, models):
+        _, replies = models
+        replies.append('{"answer": "어떤 기간인가요?", "clarification": true}')
+        assert asyncio.run(llm.generate_reply_without_documents("기간은?")) == ("어떤 기간인가요?", True)
+
+    @pytest.mark.parametrize(
+        "reply",
+        ['{"answer": "잘린', '{"clarification": true}', '{"answer": ""}', '{"answer": 1}'],
+    )
+    def test_broken_json_is_refused(self, models, reply):
+        _, replies = models
+        replies.append(reply)
+        assert asyncio.run(llm.generate_reply_without_documents("q")) == (llm.NO_EVIDENCE_ANSWER, False)
+
+    def test_repeat_is_forbidden_when_not_allowed(self, models):
+        calls, replies = models
+        replies.append("{}")
+        asyncio.run(llm.generate_reply_without_documents("연차요", False))
+        assert calls[0][1][-1].content.endswith(llm.NO_REPEAT_WITHOUT_DOCUMENTS)
+        assert "답하거나" not in calls[0][1][-1].content
