@@ -1,4 +1,4 @@
-# docs199-Server infra/minio/Dockerfile과 같은 방식이다. minio/minio 이미지는 Docker Hub에서 받을 수 없다
+# Trace-Server infra/minio/Dockerfile과 같은 방식이다. minio/minio 이미지는 Docker Hub에서 받을 수 없다
 FROM alpine:3.22
 
 ARG TARGETARCH

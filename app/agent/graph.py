@@ -113,7 +113,7 @@ HISTORY_LIMIT = 6
 FOLLOW_UP_PATTERN = re.compile(r"^(그럼|그러면|그건|그게|그거|그것|그 |이건|이게|이거|이 경우|앞서|위 )")
 
 
-# TODO: 이름과 값은 서버 계약에서 확정 (docs199-Server#76)
+# TODO: 이름과 값은 서버 계약에서 확정 (Trace-Server#76)
 AnswerType = Literal["ANSWER", "NO_EVIDENCE", "CLARIFICATION", "SMALL_TALK"]
 
 

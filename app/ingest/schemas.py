@@ -7,7 +7,7 @@ from app.core.schemas import CamelModel
 
 
 class IngestRequest(CamelModel):
-    """docs199-Server의 IngestRequest. 문서 ID와 제목은 ai_app 권한으로 버전에서 읽는다."""
+    """Trace-Server의 IngestRequest. 문서 ID와 제목은 ai_app 권한으로 버전에서 읽는다."""
 
     job_id: UUID
     version_id: UUID

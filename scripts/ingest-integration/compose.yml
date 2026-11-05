@@ -1,9 +1,9 @@
-# 재적재 격리 시험 전용. 시험 값이며 데이터는 메모리에만 있다. PostgreSQL과 Neo4j는 docs199-Server compose와 같은 버전이다
+# 재적재 격리 시험 전용. 시험 값이며 데이터는 메모리에만 있다. PostgreSQL과 Neo4j는 Trace-Server compose와 같은 버전이다
 services:
   postgres:
     image: pgvector/pgvector:0.8.7-pg18
     environment:
-      POSTGRES_DB: docs199_ingest_test
+      POSTGRES_DB: trace_ingest_test
       POSTGRES_USER: ingest_test
       POSTGRES_PASSWORD: ingest_test_only_password
     ports:
@@ -11,7 +11,7 @@ services:
     tmpfs:
       - /var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ingest_test -d docs199_ingest_test"]
+      test: ["CMD-SHELL", "pg_isready -U ingest_test -d trace_ingest_test"]
       interval: 2s
       timeout: 2s
       retries: 30
@@ -36,7 +36,7 @@ services:
     build:
       context: .
       dockerfile: minio.Dockerfile
-    image: docs199/ingest-minio-test:local
+    image: trace/ingest-minio-test:local
     pull_policy: build
     command: server /data
     environment:

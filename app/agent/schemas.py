@@ -5,7 +5,7 @@ from pydantic import Field, StrictBool, StringConstraints
 
 from app.core.schemas import AccessScope, CamelModel, SearchFilters
 
-# TODO: 질문 길이 제한은 서버 계약에서 확정 (docs199-Server#14)
+# TODO: 질문 길이 제한은 서버 계약에서 확정 (Trace-Server#14)
 MAX_MESSAGE_LENGTH = 2000
 
 
@@ -22,7 +22,7 @@ class AccessScopeInput(CamelModel):
 
 
 class KnownConflictInput(CamelModel):
-    """호출자가 두 문서를 모두 볼 수 있는 등록 충돌. Spring이 걸러 보낸다 (docs199-Server#101)."""
+    """호출자가 두 문서를 모두 볼 수 있는 등록 충돌. Spring이 걸러 보낸다 (Trace-Server#101)."""
 
     relation_id: UUID
     document_id: UUID
@@ -49,7 +49,7 @@ class SourceChunk(CamelModel):
 
 
 class EvidenceQuote(CamelModel):
-    # TODO: 응답 필드 이름은 서버 계약에서 확정 (docs199-Server#14)
+    # TODO: 응답 필드 이름은 서버 계약에서 확정 (Trace-Server#14)
     chunk_id: str
     source: str | None = None
     document_id: str | None = None
@@ -60,7 +60,7 @@ class EvidenceQuote(CamelModel):
 
 
 class KeywordItem(CamelModel):
-    # TODO: 형식은 서버 계약에서 확정 (docs199-Server#78)
+    # TODO: 형식은 서버 계약에서 확정 (Trace-Server#78)
     chunk_id: str
     text: str
 
@@ -81,7 +81,7 @@ class EditProposalItem(CamelModel):
 class ChatResponse(CamelModel):
     thread_id: str
     answer: str
-    # TODO: 이름과 값은 서버 계약에서 확정 (docs199-Server#76)
+    # TODO: 이름과 값은 서버 계약에서 확정 (Trace-Server#76)
     answer_type: Literal["ANSWER", "NO_EVIDENCE", "CLARIFICATION", "SMALL_TALK"]
     route: Literal["CONTEXT", "SEARCH"]
     context_probability: float | None
