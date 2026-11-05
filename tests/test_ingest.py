@@ -10,7 +10,8 @@ from pypdf import PdfWriter
 
 import main
 from app.core import config
-from app.ingest import service
+from app.core.errors import AiUnavailableError
+from app.ingest import conflicts, service
 from app.ingest.extraction import UnsupportedDocumentError, extract_text
 from app.ingest.router import IngestTasks
 from app.ingest.schemas import IngestRequest
@@ -66,8 +67,10 @@ class GraphStore:
 def results(monkeypatch):
     sent = []
 
-    async def send(job_id, status, error_message=None):
+    async def send(job_id, status, error_message=None, conflict_results=None):
         sent.append((status, error_message))
+        if conflict_results:
+            sent.append(("CONFLICTS", conflict_results))
 
     monkeypatch.setattr(service, "send_result", send)
     return sent
@@ -224,6 +227,103 @@ class TestProcess:
         run(make_request())
         assert results[-1] == ("FAILED", "문서를 처리하지 못했습니다.")
         assert SECRET_TEXT not in caplog.text
+
+
+class TestConflictRecheck:
+    RELATION = "11111111-1111-4111-8111-111111111111"
+    OTHER = "22222222-2222-4222-8222-222222222222"
+
+    def request(self):
+        return IngestRequest(
+            job_id=uuid4(),
+            version_id=uuid4(),
+            storage_key="a.md",
+            extension="md",
+            conflicts=[{"relationId": self.RELATION, "item": "이월 일수", "otherDocumentId": self.OTHER}],
+        )
+
+    def run_with(self, monkeypatch, *, resolved=True, other=("상대", "상대 본문"), chunks=({"id": "c"},)):
+        store = VectorStore(info={"document_id": "d1", "title": "연차"})
+        store.other = other
+
+        async def text(document_id):
+            if isinstance(store.other, Exception):
+                raise store.other
+            return store.other
+
+        store.current_document_text = text
+        use_store(monkeypatch, store)
+
+        async def read(key):
+            return "새 본문".encode()
+
+        async def index(document, **kwargs):
+            return list(chunks)
+
+        async def compare(*args):
+            return resolved
+
+        monkeypatch.setattr(service, "read_object", read)
+        monkeypatch.setattr(service, "index_document", index)
+        monkeypatch.setattr(service, "is_conflict_resolved", compare)
+        run(self.request())
+
+    def test_reports_result_with_done(self, monkeypatch, results):
+        self.run_with(monkeypatch)
+        assert ("CONFLICTS", [{"relationId": self.RELATION, "resolved": True}]) in results
+        assert ("DONE", None) in results
+
+    def test_missing_other_document_keeps_warning(self, monkeypatch, results):
+        self.run_with(monkeypatch, other=None)
+        assert ("CONFLICTS", [{"relationId": self.RELATION, "resolved": False}]) in results
+
+    def test_read_failure_keeps_warning_and_finishes_job(self, monkeypatch, results):
+        self.run_with(monkeypatch, other=RuntimeError("db down"))
+        assert ("CONFLICTS", [{"relationId": self.RELATION, "resolved": False}]) in results
+        assert ("DONE", None) in results
+
+    def test_stale_version_is_not_compared(self, monkeypatch, results):
+        self.run_with(monkeypatch, chunks=())
+        assert not any(item[0] == "CONFLICTS" for item in results)
+
+    def test_without_conflicts_callback_is_unchanged(self, monkeypatch, results):
+        store = VectorStore(info={"document_id": "d1", "title": "연차"})
+        use_store(monkeypatch, store)
+
+        async def read(key):
+            return "본문".encode()
+
+        async def index(document, **kwargs):
+            return [{"id": "c"}]
+
+        monkeypatch.setattr(service, "read_object", read)
+        monkeypatch.setattr(service, "index_document", index)
+        run(make_request())
+        assert results == [("PROCESSING", None), ("DONE", None)]
+
+
+class TestConflictJudge:
+    def judge(self, monkeypatch, reply, text="가", other="나"):
+        async def respond(messages):
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+        monkeypatch.setattr(conflicts, "generate_structured_response", respond)
+        return asyncio.run(conflicts.is_conflict_resolved("항목", "A", text, "B", other))
+
+    def test_true_only_when_explicit(self, monkeypatch):
+        assert self.judge(monkeypatch, '{"resolved": true}') is True
+        assert self.judge(monkeypatch, '{"resolved": false}') is False
+        assert self.judge(monkeypatch, '{"resolved": "true"}') is False
+
+    def test_bad_reply_keeps_warning(self, monkeypatch):
+        assert self.judge(monkeypatch, "그냥 글") is False
+        assert self.judge(monkeypatch, AiUnavailableError("x")) is False
+
+    def test_too_long_is_not_sent(self, monkeypatch):
+        long_text = "가" * (conflicts.MAX_COMPARE_CHARACTERS + 1)
+        assert self.judge(monkeypatch, '{"resolved": true}', text=long_text) is False
 
 
 class TestEmbeddingReuse:
