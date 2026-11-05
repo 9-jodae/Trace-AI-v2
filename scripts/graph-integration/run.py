@@ -163,6 +163,7 @@ def main() -> int:
                 "postgres_hybrid_seed_document_ids": [],
                 "graph_candidate_chunk_ids": [],
                 "postgres_accessible_document_ids": [],
+                "postgres_fetch_requested_chunk_ids": [],
                 "postgres_hydrated_chunk_ids": [],
                 "postgres_hydrated_document_ids": [],
                 "postgres_hydrated_version_ids": [],
@@ -274,11 +275,19 @@ def main() -> int:
         async def traced_fetch(self, chunk_ids, scope, filters=None, embedding=None):
             result = await original_fetch(self, chunk_ids, scope, filters, embedding)
             if capture["enabled"]:
-                trace["postgres_hydrated_chunk_ids"] = [item["id"] for item in result]
-                trace["postgres_hydrated_document_ids"] = [item["document_id"] for item in result]
-                trace["postgres_hydrated_version_ids"] = [item["version_id"] for item in result]
-                hydrated_ids = {item["id"] for item in result}
-                trace["postgres_unhydrated_candidate_chunk_ids"] = sorted(set(chunk_ids) - hydrated_ids)
+                requested_ids = list(dict.fromkeys([*trace["postgres_fetch_requested_chunk_ids"], *chunk_ids]))
+                trace["postgres_fetch_requested_chunk_ids"] = requested_ids
+                trace["postgres_hydrated_chunk_ids"] = list(dict.fromkeys([
+                    *trace["postgres_hydrated_chunk_ids"], *(item["id"] for item in result)
+                ]))
+                trace["postgres_hydrated_document_ids"] = list(dict.fromkeys([
+                    *trace["postgres_hydrated_document_ids"], *(item["document_id"] for item in result)
+                ]))
+                trace["postgres_hydrated_version_ids"] = list(dict.fromkeys([
+                    *trace["postgres_hydrated_version_ids"], *(item["version_id"] for item in result)
+                ]))
+                hydrated_ids = set(trace["postgres_hydrated_chunk_ids"])
+                trace["postgres_unhydrated_candidate_chunk_ids"] = sorted(set(requested_ids) - hydrated_ids)
             return result
 
         async def traced_vector(self, query_embedding, limit, scope, filters=None):
