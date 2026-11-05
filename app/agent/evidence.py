@@ -16,6 +16,8 @@ MAX_EVIDENCE = 3
 MIN_CLARIFICATION_OPTIONS = 2
 MAX_KEYWORDS = 3
 MAX_KEYWORD_LENGTH = 50
+MAX_EDITS = 8
+MAX_EDIT_LENGTH = 1000
 ANSWER_OBJECT_PATTERN = re.compile(r'\{\s*"answer"\s*:')
 JSON_START_PATTERN = re.compile(r"\s*(```(?:json)?\s*)?\{")
 
@@ -40,11 +42,24 @@ class AnswerCandidate(BaseModel):
     evidence: Any = None
     keywords: Any = None
     options: Any = None
+    edits: Any = None
 
 
 class Keyword(TypedDict):
     chunk_id: str
     text: str
+
+
+class EditProposal(TypedDict):
+    chunk_id: str
+    source: str | None
+    document_id: str | None
+    version_id: str | None
+    before: str
+    after: str
+    reason: str
+    char_start: int | None
+    char_end: int | None
 
 
 class Evidence(TypedDict):
@@ -171,3 +186,67 @@ def parse_answer(response: str, context: list[Chunk]) -> ParsedAnswer:
     if _is_valid_clarification(candidate.options, context):
         return ParsedAnswer(candidate.answer, [], True, [])
     return ParsedAnswer(candidate.answer, evidence, False, ground_keywords(candidate.keywords, context))
+
+
+class EditCandidate(BaseModel):
+    chunk: StrictInt
+    before: str
+    after: str
+    reason: str = ""
+
+
+def ground_edits(raw: Any, context: list[Chunk]) -> list[EditProposal]:
+    # 원문에 한 번만 있는 문장만 제안한다. 두 곳 이상이면 어디를 고칠지 알 수 없다. 위치는 원문에서 직접 계산한다
+    edits: list[EditProposal] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw if isinstance(raw, list) else []:
+        try:
+            candidate = EditCandidate.model_validate(item)
+        except ValidationError:
+            continue
+        before, after = candidate.before.strip(), candidate.after.strip()
+        if not before or not after or before == after or max(len(before), len(after)) > MAX_EDIT_LENGTH:
+            continue
+        if not 1 <= candidate.chunk <= len(context):
+            continue
+        chunk = context[candidate.chunk - 1]
+        if chunk["text"].count(before) != 1 or (chunk["id"], before) in seen:
+            continue
+        seen.add((chunk["id"], before))
+        position = chunk["text"].index(before)
+        base = chunk.get("char_start")
+        edits.append(
+            {
+                "chunk_id": chunk["id"],
+                "source": chunk.get("source"),
+                "document_id": chunk.get("document_id"),
+                "version_id": chunk.get("version_id"),
+                "before": before,
+                "after": after,
+                "reason": candidate.reason.strip()[:MAX_EDIT_LENGTH],
+                "char_start": None if base is None else base + position,
+                "char_end": None if base is None else base + position + len(before),
+            }
+        )
+    return edits[:MAX_EDITS]
+
+
+NO_GROUNDED_EDITS = (
+    "원문과 정확히 일치하는 문장을 찾지 못해 수정안을 만들지 못했습니다. 바꿀 문장이 있는 문서 이름을 함께 알려 주세요."
+)
+
+
+def describe_edits(edits: list[EditProposal]) -> str:
+    """답변 아래에 붙일 수정안. 문서는 바꾸지 않았다는 것을 함께 밝힌다."""
+    if not edits:
+        return NO_GROUNDED_EDITS
+    lines = [
+        f"- 「{edit['source'] or '출처 미상'}」\n  - 현재: {edit['before']}\n  - 수정안: {edit['after']}"
+        for edit in edits
+    ]
+    return "**수정 제안** (문서는 아직 바뀌지 않았습니다)\n" + "\n".join(lines)
+
+
+def parse_edit_proposals(response: str, context: list[Chunk]) -> list[EditProposal]:
+    candidate = _load_candidate(response)
+    return ground_edits(candidate.edits, context) if candidate else []

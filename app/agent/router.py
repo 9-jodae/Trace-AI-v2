@@ -10,6 +10,7 @@ from app.agent.schemas import ChatRequest, ChatResponse
 from app.core import config
 from app.core.auth import require_internal_secret
 from app.core.errors import AiUnavailableError
+from app.retrieval.service import KnownConflict
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,10 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
                         "context": saved["context"],
                         "filters": body.filters,
                         "access_scope": body.access_scope.to_scope() if body.access_scope else None,
+                        "known_conflicts": [
+                            KnownConflict(conflict.document_id, conflict.other_document_id, conflict.item)
+                            for conflict in body.known_conflicts or []
+                        ],
                     },
                 )
                 # 실패한 요청은 여기까지 오지 않으므로 대화 기록과 컨텍스트에 남지 않는다
@@ -49,6 +54,7 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
         sources=result["context"],
         evidence=result["evidence"],
         keywords=result["keywords"],
+        edit_proposals=result.get("edit_proposals", []),
         failed_sources=result["failed_sources"],
         fallback_reason=result["fallback_reason"],
     )

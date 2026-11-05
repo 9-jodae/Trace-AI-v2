@@ -1,6 +1,8 @@
 import asyncio
 import logging
 from functools import cache
+from typing import NamedTuple
+from uuid import UUID
 
 from typing_extensions import TypedDict
 
@@ -8,9 +10,9 @@ from app.core import config
 from app.core.errors import AiUnavailableError, describe_exception
 from app.core.schemas import AccessScope, SearchFilters
 from app.retrieval.embedding import embed_query
-from app.retrieval.fusion import rrf_fuse
+from app.retrieval.fusion import distinct_documents_first, rrf_fuse
 from app.retrieval.neo4j_store import Neo4jGraphStore
-from app.retrieval.schemas import Chunk
+from app.retrieval.schemas import Chunk, RegisteredConflict
 from app.retrieval.stores import (
     CHUNK_EMBEDDING_DIMENSIONS,
     GraphStore,
@@ -29,15 +31,31 @@ FULLTEXT_FALLBACK_BELOW = 5
 # 권한 필터로 줄어들어도 SOURCE_LIMIT을 채울 수 있도록 그래프 후보를 더 가져온다
 GRAPH_CANDIDATE_LIMIT = 50
 CONTEXT_LIMIT = 5
+# 문서마다 하나씩 먼저 채우기 전에 넉넉히 합쳐 둘 후보 수
+FUSION_CANDIDATE_LIMIT = CONTEXT_LIMIT * 4
 # 연쇄 참조를 따라갈 시작 문서 수, 단계 수, 답변 근거에 넣을 청크 수
 CHAIN_SEED_DOCUMENTS = 3
 CHAIN_MAX_HOPS = 2
 CHAIN_CONTEXT_LIMIT = 2
+# 충돌 탐색 질문에 근거로 넣을 등록 충돌 수와 문서마다 넣을 청크 수
+KNOWN_CONFLICT_LIMIT = 5
+KNOWN_CONFLICT_CHUNKS = 2
 
 
 class SearchResult(TypedDict):
     chunks: list[Chunk]
     failed_sources: list[str]
+
+
+class KnownConflict(NamedTuple):
+    document_id: UUID
+    other_document_id: UUID
+    item: str
+
+
+class KnownConflictResult(TypedDict):
+    chunks: list[Chunk]
+    conflicts: list[RegisteredConflict]
 
 
 @cache
@@ -114,6 +132,60 @@ async def filter_accessible_context(chunks: list[Chunk], scope: AccessScope | No
     return [chunk for chunk in chunks if chunk["id"] in accessible]
 
 
+async def _nearest_in_document(
+    document_id: UUID,
+    scope: AccessScope | None,
+    filters: SearchFilters | None,
+    embedding: list[float],
+) -> list[Chunk]:
+    vector_store, graph_store = get_stores()
+    chunk_ids = await graph_store.document_chunks([str(document_id)])
+    return await vector_store.nearest_accessible(chunk_ids, scope, filters, embedding, KNOWN_CONFLICT_CHUNKS)
+
+
+async def _known_conflict_pair(
+    conflict: KnownConflict, scope: AccessScope | None, filters: SearchFilters | None
+) -> tuple[list[Chunk], list[Chunk]]:
+    embedding = await embed_query(conflict.item)
+    first, second = await asyncio.gather(
+        _nearest_in_document(conflict.document_id, scope, filters, embedding),
+        _nearest_in_document(conflict.other_document_id, scope, filters, embedding),
+    )
+    return first, second
+
+
+async def fetch_known_conflicts(
+    conflicts: list[KnownConflict], filters: SearchFilters | None = None, request_scope: AccessScope | None = None
+) -> KnownConflictResult:
+    """등록 충돌의 두 문서에서 항목과 가까운 청크를 찾는다. 권한과 필터는 일반 검색과 같이 다시 확인한다."""
+    scope = request_scope or config.access_scope()
+    empty: KnownConflictResult = {"chunks": [], "conflicts": []}
+    if scope is None and not config.use_sample_data():
+        return empty
+    selected = conflicts[:KNOWN_CONFLICT_LIMIT]
+    try:
+        pairs = await asyncio.gather(*(_known_conflict_pair(conflict, scope, filters) for conflict in selected))
+    except Exception as exc:
+        # 등록 충돌을 못 읽어도 일반 검색 결과로 답한다. 답변은 검색 범위를 밝힌다
+        logger.warning("Known conflict lookup failed: %s", describe_exception(exc))
+        return empty
+    chunks: dict[str, Chunk] = {}
+    registered: list[RegisteredConflict] = []
+    for conflict, (first, second) in zip(selected, pairs, strict=True):
+        # 한쪽이라도 필터 밖이거나 청크가 없으면 비교할 수 없으므로 뺀다
+        if not first or not second:
+            continue
+        chunks.update({chunk["id"]: chunk for chunk in [*first, *second]})
+        registered.append(
+            {
+                "item": conflict.item,
+                "source": first[0].get("source") or "출처 미상",
+                "other_source": second[0].get("source") or "출처 미상",
+            }
+        )
+    return {"chunks": list(chunks.values()), "conflicts": registered}
+
+
 async def search(
     query: str, filters: SearchFilters | None = None, request_scope: AccessScope | None = None
 ) -> SearchResult:
@@ -179,7 +251,12 @@ async def search(
             failed.append("fulltext")
     if not rankings:
         raise AiUnavailableError("벡터, 그래프, 전문 검색이 모두 실패했습니다.")
-    chunks = rrf_fuse(rankings, CONTEXT_LIMIT)
+    # 문서가 147개로 늘자 같은 문서의 청크가 근거를 여러 칸 차지해 기대 문서를 밀어냈다(2026-11-06 측정)
+    chunks = distinct_documents_first(rrf_fuse(rankings, FUSION_CANDIDATE_LIMIT), CONTEXT_LIMIT)
+    # 본문은 PostgreSQL에만 있어 벡터와 전문 검색이 모두 실패하면 찾지 못한 것이 아니라 장애다.
+    # 그래프 후보가 비어 성공으로 끝나도 "문서 없음"으로 답하지 않는다
+    if not chunks and {"vector", "fulltext"} <= set(failed):
+        raise AiUnavailableError("문서 검색을 사용할 수 없습니다.")
     if chunks and isinstance(graph_store, Neo4jGraphStore) and config.graph_search_enabled():
         try:
             embedding = None if query_embedding.exception() else query_embedding.result()

@@ -45,7 +45,8 @@ class FakeJevClient:
         pass
 
     async def system_one(self, state, questions):
-        small_talk = "small_talk" in questions
+        # 문서 답을 고르는 재사용 판단만 센다. 일상 대화와 수정 요청 판단은 질문마다 호출된다
+        small_talk = "small_talk" in questions or "edit_request" in questions
         if not small_talk:
             FakeJevClient.counter["jev"] += 1
             FakeJevClient.counter["state"] = state
@@ -55,7 +56,7 @@ class FakeJevClient:
             noul = probability
 
         class Response:
-            nouls = {"small_talk" if small_talk else "can_answer": Noul}
+            nouls = {"small_talk": Noul, "edit_request": Noul} if small_talk else {"can_answer": Noul}
 
         return Response
 

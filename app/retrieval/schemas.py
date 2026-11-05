@@ -59,3 +59,9 @@ class RelationAssertion(TypedDict):
     polarity: AssertionPolarity
     modality: AssertionModality
     condition_quote: str | None
+
+
+class RegisteredConflict(TypedDict):
+    item: str
+    source: str
+    other_source: str

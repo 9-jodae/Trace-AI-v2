@@ -13,8 +13,9 @@ DEFAULT_MAX_CONVERSATIONS = 1000
 DEFAULT_CONVERSATION_TTL_SECONDS = 3600
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
 DEFAULT_DB_POOL_MAX_SIZE = 10
-# 시연 문서 18개와 질문 15개로 측정한 값. 관련 질문의 정답은 0.82 이하, 무관 질문은 대부분 0.85 이상이었다
-DEFAULT_VECTOR_MAX_COSINE_DISTANCE = 0.85
+# 문서 147개와 질문 9개로 다시 잰 값(2026-11-06). 0.85보다 기대 문서 적중은 같고 무관 질문의 결과는 줄었다.
+# 0.70은 기대 문서를 놓쳤다
+DEFAULT_VECTOR_MAX_COSINE_DISTANCE = 0.75
 
 
 def is_production() -> bool:
@@ -74,9 +75,19 @@ def graph_search_enabled() -> bool:
     return os.getenv("GRAPH_SEARCH_ENABLED", "").strip().lower() != "false"
 
 
+def edit_proposals_enabled() -> bool:
+    """켜면 수정 요청에 수정안을 만든다. 끄면 수정은 지원하지 않는다고 답하고 관련 값과 충돌만 알린다."""
+    return os.getenv("EDIT_PROPOSALS_ENABLED", "").strip().lower() == "true"
+
+
 def document_topics_enabled() -> bool:
     """켜면 적재할 때 문서마다 앞부분을 LLM으로 보내 주제를 만든다."""
     return os.getenv("DOCUMENT_TOPICS_ENABLED", "").strip().lower() == "true"
+
+
+def document_type_enabled() -> bool:
+    """켜면 적재할 때 문서마다 앞부분을 LLM으로 보내 유형을 정하고 Spring 콜백에 담는다."""
+    return os.getenv("DOCUMENT_TYPE_ENABLED", "").strip().lower() == "true"
 
 
 def neo4j_database() -> str | None:
@@ -110,6 +121,37 @@ def jev_api_key() -> str | None:
 
 def jev_model() -> str:
     return os.getenv("JEV_MODEL") or DEFAULT_JEV_MODEL
+
+
+def spring_internal_url() -> str:
+    # AI가 적재 결과를 알릴 Spring 주소. 게이트웨이는 내부 경로를 막으므로 앱 포트를 직접 가리켜야 한다
+    return (os.getenv("SPRING_INTERNAL_URL") or "http://localhost:8080").rstrip("/")
+
+
+def storage_bucket() -> str:
+    return os.getenv("STORAGE_BUCKET") or "documents"
+
+
+def storage_prefix() -> str:
+    # 운영 S3는 Spring의 S3_PREFIX와 같아야 한다. 값이 있으면 끝에 / 하나를 붙인다
+    prefix = (os.getenv("STORAGE_PREFIX") or "").strip("/")
+    return f"{prefix}/" if prefix else ""
+
+
+def storage_endpoint_url() -> str | None:
+    return os.getenv("STORAGE_ENDPOINT_URL") or None
+
+
+def storage_access_key() -> str | None:
+    return os.getenv("STORAGE_ACCESS_KEY") or None
+
+
+def storage_secret_key() -> str | None:
+    return os.getenv("STORAGE_SECRET_KEY") or None
+
+
+def storage_region() -> str | None:
+    return os.getenv("STORAGE_REGION") or None
 
 
 def embedding_api_key() -> str | None:

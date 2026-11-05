@@ -36,6 +36,7 @@ async def index_document(
     reference_catalog: list[DocumentInput] | None = None,
     update_references: bool = True,
     known_topics: list[str] | None = None,
+    reuse_embeddings: bool = False,
 ) -> list[Chunk]:
     chunks = chunk_document(document["document_id"], document["version_id"], document["text"], document["source"])
     if not chunks:
@@ -45,7 +46,7 @@ async def index_document(
     if not await vector_store.is_current_version(document["version_id"]):
         logger.warning("Indexing skipped: not the current version")
         return []
-    embeddings = await embed_documents([chunk["text"] for chunk in chunks])
+    embeddings = await _embed_chunks(vector_store, document["document_id"], chunks, reuse_embeddings)
     if not await vector_store.replace_version(document["version_id"], chunks, embeddings):
         logger.warning("Indexing skipped: version changed while embedding")
         return []
@@ -72,6 +73,18 @@ async def index_document(
         catalog = reference_catalog or await _reference_catalog(graph_store)
         await _replace_document_references(graph_store, document, chunks, catalog)
     return chunks
+
+
+async def _embed_chunks(vector_store, document_id: str, chunks: list[Chunk], reuse: bool) -> list[list[float]]:
+    # 같은 모델로 만든 이전 버전 임베딩만 재사용할 수 있으므로 모델을 바꿔 전체를 다시 적재할 때는 끈다
+    hashes = [chunk["content_hash"] for chunk in chunks]
+    known = await vector_store.embeddings_by_hash(document_id, hashes) if reuse else {}
+    changed = [chunk for chunk in chunks if chunk["content_hash"] not in known]
+    if changed:
+        created = await embed_documents([chunk["text"] for chunk in changed])
+        known = {**known, **dict(zip((chunk["content_hash"] for chunk in changed), created, strict=True))}
+    logger.info("Embedding: chunks=%d new=%d", len(chunks), len(changed))
+    return [known[chunk["content_hash"]] for chunk in chunks]
 
 
 async def _reference_catalog(graph_store, documents: list[DocumentInput] = ()) -> list[DocumentInput]:

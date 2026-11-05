@@ -1,6 +1,6 @@
 from conftest import chunk
 
-from app.retrieval.fusion import RRF_K, rrf_fuse
+from app.retrieval.fusion import RRF_K, distinct_documents_first, rrf_fuse
 
 A, B, C, D = chunk("a"), chunk("b"), chunk("c"), chunk("d")
 
@@ -64,3 +64,15 @@ def test_limit_is_applied():
     fused = rrf_fuse([[_chunk("a"), _chunk("b"), _chunk("c")]], limit=2)
 
     assert [chunk["id"] for chunk in fused] == ["a", "b"]
+
+
+def test_distinct_documents_fill_first():
+    one = {"id": "1a", "document_id": "d1"}
+    two = {"id": "1b", "document_id": "d1"}
+    other = {"id": "2a", "document_id": "d2"}
+    assert distinct_documents_first([one, two, other], 2) == [one, other]
+    assert distinct_documents_first([one, two, other], 5) == [one, other, two]
+
+
+def test_distinct_documents_without_document_id_use_chunk_id():
+    assert distinct_documents_first([A, B], 5) == [A, B]

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import math
 import re
 from typing import Protocol
@@ -12,9 +13,9 @@ from app.retrieval.embedding import embed_documents
 from app.retrieval.schemas import Chunk
 
 MAX_FULLTEXT_TERMS = 12
-# chunks.embedding 컬럼의 차원 (docs199-Server V11)
+# chunks.embedding 컬럼의 차원 (Trace-Server V11)
 CHUNK_EMBEDDING_DIMENSIONS = 1024
-# 권한과 필터 판단은 서버 함수에 맡긴다. 삭제된 문서와 이전 버전도 함수가 제외한다 (docs199-Server V12, V13)
+# 권한과 필터 판단은 서버 함수에 맡긴다. 삭제된 문서와 이전 버전도 함수가 제외한다 (Trace-Server V12, V13)
 VECTOR_SEARCH_SQL = """
 SELECT c.id::text AS id, c.content AS text, d.title AS source, dv.document_id::text AS document_id,
        c.document_version_id::text AS version_id, c.char_start, c.char_end
@@ -105,7 +106,21 @@ JOIN documents d ON d.id = dv.document_id
 WHERE dv.id = %s::uuid AND dv.version_number = d.current_version AND d.deleted_at IS NULL
 """
 DELETE_VERSION_SQL = "DELETE FROM chunks WHERE document_version_id = %s"
-# ai_app은 테이블을 직접 읽거나 쓰지 못하고 이 함수만 실행한다 (docs199-Server V15)
+# ai_app은 테이블을 직접 읽거나 쓰지 못하고 이 함수만 실행한다 (Trace-Server V15)
+CURRENT_VERSION_DOCUMENT_SQL = """
+SELECT d.id::text AS document_id, d.title
+FROM document_versions dv
+JOIN documents d ON d.id = dv.document_id
+WHERE dv.id = %s::uuid AND dv.version_number = d.current_version AND d.deleted_at IS NULL
+"""
+# 이전 버전에서 내용이 같은 청크의 임베딩을 찾는다. 다른 문서는 보지 않는다
+EMBEDDINGS_BY_HASH_SQL = """
+SELECT DISTINCT ON (c.content_hash) c.content_hash, c.embedding::text AS embedding
+FROM chunks c
+JOIN document_versions dv ON dv.id = c.document_version_id
+WHERE dv.document_id = %s::uuid AND c.content_hash = ANY(%s) AND c.embedding IS NOT NULL
+ORDER BY c.content_hash, dv.version_number DESC
+"""
 REPLACE_TOPICS_SQL = "SELECT replace_document_topics(%s::uuid, %s::text[])"
 INSERT_CHUNK_SQL = """
 INSERT INTO chunks (id, document_version_id, chunk_index, content, char_start, char_end, content_hash, embedding)
@@ -133,6 +148,10 @@ def build_fulltext_query(text: str) -> str:
 
 
 class VectorStore(Protocol):
+    async def current_version_document(self, version_id: str) -> dict | None: ...
+
+    async def embeddings_by_hash(self, document_id: str, hashes: list[str]) -> dict[str, list[float]]: ...
+
     async def replace_document_topics(self, version_id: str, topics: list[str]) -> None: ...
 
     async def search(
@@ -193,7 +212,7 @@ def _to_vector(embedding: list[float]) -> str:
 
 
 def _filter_params(filters: SearchFilters | None) -> tuple:
-    # 필터를 끄려면 서버 함수에 명시적으로 NULL을 넘긴다 (docs199-Server ai-server-contract)
+    # 필터를 끄려면 서버 함수에 명시적으로 NULL을 넘긴다 (Trace-Server ai-server-contract)
     if filters is None:
         return (None, None, None, None, None)
     return (
@@ -322,6 +341,14 @@ class PostgresVectorStore:
 
     async def is_current_version(self, version_id: str) -> bool:
         return bool(await self._read(IS_CURRENT_VERSION_SQL, (version_id,)))
+
+    async def current_version_document(self, version_id: str) -> dict | None:
+        rows = await self._read(CURRENT_VERSION_DOCUMENT_SQL, (version_id,))
+        return rows[0] if rows else None
+
+    async def embeddings_by_hash(self, document_id: str, hashes: list[str]) -> dict[str, list[float]]:
+        rows = await self._read(EMBEDDINGS_BY_HASH_SQL, (document_id, hashes))
+        return {row["content_hash"]: json.loads(row["embedding"]) for row in rows}
 
     async def replace_document_topics(self, version_id: str, topics: list[str]) -> None:
         pool = await self._get_pool()

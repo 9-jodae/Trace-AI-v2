@@ -16,3 +16,15 @@ def rrf_fuse(rankings: list[list[Chunk]], limit: int) -> list[Chunk]:
             chunks.setdefault(chunk["id"], chunk)
     ordered = sorted(scores, key=lambda chunk_id: scores[chunk_id], reverse=True)
     return [chunks[chunk_id] for chunk_id in ordered[:limit]]
+
+
+def distinct_documents_first(chunks: list[Chunk], limit: int) -> list[Chunk]:
+    """같은 문서의 두 번째 청크가 다른 문서를 밀어내지 않게 문서마다 하나씩 먼저 채운다. 순서는 유지한다."""
+    seen: set[str] = set()
+    first: list[Chunk] = []
+    rest: list[Chunk] = []
+    for chunk in chunks:
+        key = chunk.get("document_id") or chunk["id"]
+        (rest if key in seen else first).append(chunk)
+        seen.add(key)
+    return [*first, *rest][:limit]

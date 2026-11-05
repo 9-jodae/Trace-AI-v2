@@ -72,6 +72,9 @@ class FakeAi:
         self.rewrite = None
         self.rewrite_calls = []
 
+    async def edit_request_probability(self, question):
+        return 0.0
+
     async def small_talk_probability(self, question):
         self.small_talk_calls.append(question)
         if isinstance(self.small_talk, Exception):
@@ -120,6 +123,7 @@ class FakeAi:
 def ai(monkeypatch):
     fake = FakeAi()
     monkeypatch.setattr(graph, "can_answer_probability", fake.can_answer)
+    monkeypatch.setattr(graph, "edit_request_probability", fake.edit_request_probability)
     monkeypatch.setattr(graph, "small_talk_probability", fake.small_talk_probability)
     monkeypatch.setattr(graph, "generate_reply_without_documents", fake.generate_reply)
     monkeypatch.setattr(graph, "rewrite_search_query", fake.rewrite_query)
