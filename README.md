@@ -8,7 +8,7 @@ Python AI 서버는 FastAPI와 LangGraph로 검색과 답변 생성을 처리합
 
 ## 로컬 실행
 
-자세한 내용은 [로컬 실행 안내](docs/local-setup.md)를 참고하세요.
+자세한 내용은 [로컬 실행 안내](docs/local-setup.md)를 참고하세요. 팀 서버 실행은 [팀 서버 실행 안내](docs/server-setup.md)를 참고하세요.
 
 ```bash
 python -m venv .venv
