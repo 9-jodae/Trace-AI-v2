@@ -66,7 +66,9 @@ class FakeAi:
         self.small_talk = 0.0
         self.small_talk_calls = []
         self.reply = graph.NO_EVIDENCE_ANSWER
+        self.reply_clarification = False
         self.reply_calls = []
+        self.reply_allowed = []
 
     async def small_talk_probability(self, question):
         self.small_talk_calls.append(question)
@@ -74,11 +76,12 @@ class FakeAi:
             raise self.small_talk
         return self.small_talk
 
-    async def generate_reply(self, question):
+    async def generate_reply(self, question, allow_clarification=True):
         self.reply_calls.append(question)
+        self.reply_allowed.append(allow_clarification)
         if isinstance(self.reply, Exception):
             raise self.reply
-        return self.reply
+        return llm_client.NoDocumentReply(self.reply, self.reply_clarification)
 
     async def can_answer(self, question, context, history):
         self.jev_calls.append({"question": question, "context": context, "history": history})

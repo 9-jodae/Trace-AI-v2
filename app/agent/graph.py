@@ -52,7 +52,8 @@ def _history(state: AgentState) -> list[AnyMessage]:
 
 
 async def judge_small_talk(state: AgentState) -> dict:
-    if not config.jev_api_key():
+    # "네"처럼 되물음에 답한 말은 일상 대화로 보내지 않는다
+    if not config.jev_api_key() or _follows_clarification(state):
         return {"small_talk": False}
     try:
         probability = await small_talk_probability(state["messages"][-1].text)
@@ -70,7 +71,7 @@ def select_small_talk(state: AgentState) -> str:
 async def small_talk(state: AgentState) -> dict:
     # 쓰이지 않은 청크를 출처로 보여 주지 않는다. route 값은 서버 계약이 정해질 때까지 늘리지 않는다
     return {
-        "messages": [AIMessage(content=await _reply_without_documents(state))],
+        "messages": [await _reply_without_documents(state)],
         "evidence": [],
         "context": [],
         "route": "SEARCH",
@@ -134,18 +135,22 @@ async def retrieve(state: AgentState) -> dict:
     return {"context": result["chunks"], "failed_sources": result["failed_sources"]}
 
 
-async def _reply_without_documents(state: AgentState) -> str:
+async def _reply_without_documents(state: AgentState) -> AIMessage:
+    follows = _follows_clarification(state)
     try:
-        return await generate_reply_without_documents(state["messages"][-1].text)
+        answer, clarification = await generate_reply_without_documents(state["messages"][-1].text, not follows)
     except AiUnavailableError as exc:
         # 문서가 없는 응대가 실패했다고 오류로 끝내지 않고 이전처럼 거절 문장으로 답한다
         logger.warning("Reply without documents failed: %s", exc)
-        return NO_EVIDENCE_ANSWER
+        return AIMessage(content=NO_EVIDENCE_ANSWER)
+    # 두 번 연달아 되묻지 않는다. 모델이 어기면 일반 답변으로 내보낸다
+    marked = clarification and not follows
+    return AIMessage(content=answer, additional_kwargs={CLARIFICATION_KEY: True} if marked else {})
 
 
 async def generate(state: AgentState) -> dict:
     if not state["context"]:
-        return {"messages": [AIMessage(content=await _reply_without_documents(state))], "evidence": []}
+        return {"messages": [await _reply_without_documents(state)], "evidence": []}
     response = await generate_answer(state["messages"][-1].text, state["context"], _history(state))
     answer, evidence, clarification = parse_answer(response, state["context"])
     # 두 번 연달아 되묻지 않는다. 모델이 어기면 일반 답변으로 내보낸다

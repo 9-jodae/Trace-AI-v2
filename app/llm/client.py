@@ -1,7 +1,9 @@
 import asyncio
+import json
 import logging
 import re
 from functools import lru_cache
+from typing import NamedTuple
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -64,7 +66,9 @@ NO_DOCUMENT_PROMPT = f"""사내 문서 도우미로 대화한다. 지금은 관�
 - 사내 문서에 관한 질문 같지만 무엇을 묻는지 불분명하면
   "어떤 기간에 관한 질문인가요? 좀 더 자세히 말씀해 주세요."처럼 되묻고 자세히 말해 달라고 요청한다.
 - 그 밖의 모든 질문에는 정확히 '{NO_EVIDENCE_ANSWER}' 한 문장만 쓴다.
-- 회사 정책, 수치, 담당 부서, 절차를 말하거나 추측하지 않는다."""
+- 회사 정책, 수치, 담당 부서, 절차를 말하거나 추측하지 않는다.
+다음 형식의 JSON 객체 하나만 응답한다. clarification은 되물을 때만 true로 쓴다.
+{{"answer": "답변", "clarification": false}}"""
 CLARIFICATION_KEY = "clarification"
 NO_REPEAT_CLARIFICATION = "직전에 이미 되물었으므로 이번에는 되묻지 말고 답하거나 거절 문장을 쓴다."
 
@@ -111,13 +115,34 @@ async def generate_answer(question: str, context: list[Chunk], history: list[Bas
     return await generate_structured_response(messages)
 
 
-async def generate_reply_without_documents(question: str) -> str:
+class NoDocumentReply(NamedTuple):
+    answer: str
+    clarification: bool
+
+
+def _parse_no_document_reply(reply: str) -> NoDocumentReply:
+    if NO_EVIDENCE_ANSWER in reply:
+        return NoDocumentReply(NO_EVIDENCE_ANSWER, False)
+    start = reply.find("{")
+    if start < 0:
+        # 모델이 형식을 무시하고 글로 답하면 답변만 살린다
+        return NoDocumentReply(reply, False)
+    try:
+        data, _ = json.JSONDecoder(strict=False).raw_decode(reply, start)
+        return NoDocumentReply(data["answer"].strip() or NO_EVIDENCE_ANSWER, data.get("clarification") is True)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        # 잘린 JSON을 사용자에게 그대로 보여 주지 않는다. 응답 본문은 기록하지 않는다
+        logger.warning("No document reply parse failed: length=%d", len(reply))
+        return NoDocumentReply(NO_EVIDENCE_ANSWER, False)
+
+
+async def generate_reply_without_documents(question: str, allow_clarification: bool = True) -> NoDocumentReply:
     # 이전 대화의 문서 내용을 다시 쓰지 않도록 대화 기록을 넘기지 않는다
-    messages = [SystemMessage(content=NO_DOCUMENT_PROMPT), HumanMessage(content=question)]
+    content = question if allow_clarification else f"{question}\n\n{NO_REPEAT_CLARIFICATION}"
+    messages = [SystemMessage(content=NO_DOCUMENT_PROMPT), HumanMessage(content=content)]
     # 응대 모델을 쓰지 못해도 답변 모델로 응대한다
     reply = await generate_structured_response(messages, config.chat_llm_model(), config.llm_model())
-    reply = reply.strip()
-    return NO_EVIDENCE_ANSWER if NO_EVIDENCE_ANSWER in reply else reply
+    return _parse_no_document_reply(reply.strip())
 
 
 async def generate_structured_response(

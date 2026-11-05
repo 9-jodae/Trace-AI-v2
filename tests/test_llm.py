@@ -293,17 +293,37 @@ class TestReplyWithoutDocuments:
 
     def test_uses_chat_model_without_history(self, models):
         calls, replies = models
-        replies.append(" 안녕하세요! ")
-        assert asyncio.run(llm.generate_reply_without_documents("안녕?")) == "안녕하세요!"
+        replies.append('{"answer": " 안녕하세요! ", "clarification": false}')
+        assert asyncio.run(llm.generate_reply_without_documents("안녕?")) == ("안녕하세요!", False)
         assert calls[0][0] == "fake:chat" and len(calls[0][1]) == 2 and calls[0][1][-1].content == "안녕?"
 
     def test_falls_back_to_answer_model(self, models):
         calls, replies = models
         replies.extend([RuntimeError("권한 없음"), "안녕하세요!"])
-        assert asyncio.run(llm.generate_reply_without_documents("안녕?")) == "안녕하세요!"
+        assert asyncio.run(llm.generate_reply_without_documents("안녕?")) == ("안녕하세요!", False)
         assert [call[0] for call in calls] == ["fake:chat", "fake:fake-llm"]
 
     def test_refusal_is_normalized(self, models):
         _, replies = models
         replies.append(f"죄송합니다. {llm.NO_EVIDENCE_ANSWER} 인사팀에 문의하세요.")
-        assert asyncio.run(llm.generate_reply_without_documents("점심 추천")) == llm.NO_EVIDENCE_ANSWER
+        assert asyncio.run(llm.generate_reply_without_documents("점심 추천")) == (llm.NO_EVIDENCE_ANSWER, False)
+
+    def test_clarification_is_marked(self, models):
+        _, replies = models
+        replies.append('{"answer": "어떤 기간인가요?", "clarification": true}')
+        assert asyncio.run(llm.generate_reply_without_documents("기간은?")) == ("어떤 기간인가요?", True)
+
+    @pytest.mark.parametrize(
+        "reply",
+        ['{"answer": "잘린', '{"clarification": true}', '{"answer": ""}', '{"answer": 1}'],
+    )
+    def test_broken_json_is_refused(self, models, reply):
+        _, replies = models
+        replies.append(reply)
+        assert asyncio.run(llm.generate_reply_without_documents("q")) == (llm.NO_EVIDENCE_ANSWER, False)
+
+    def test_repeat_is_forbidden_when_not_allowed(self, models):
+        calls, replies = models
+        replies.append("{}")
+        asyncio.run(llm.generate_reply_without_documents("연차요", False))
+        assert calls[0][1][-1].content.endswith(llm.NO_REPEAT_CLARIFICATION)

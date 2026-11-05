@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse
 import main
 from app.agent import graph
 from app.core.errors import AiUnavailableError
+from app.llm.client import NoDocumentReply
 
 CHUNK = {"id": "a", "text": "재택근무 규정은 보안팀이 승인했다.", "source": "재택근무 규정"}
 SCRIPT = (Path(__file__).parents[2] / "app/playground/index.html").read_text(encoding="utf-8")
@@ -47,8 +48,8 @@ async def small_talk_probability(question):
     return 0.0
 
 
-async def generate_reply(question):
-    return graph.NO_EVIDENCE_ANSWER
+async def generate_reply(question, allow_clarification=True):
+    return NoDocumentReply(graph.NO_EVIDENCE_ANSWER, False)
 
 
 graph.small_talk_probability = small_talk_probability

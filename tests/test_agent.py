@@ -193,3 +193,30 @@ class TestSmallTalk:
         ai.jev_calls.clear()
         ask("q2")
         assert ai.jev_calls == [] and len(ai.search_calls) == 2
+
+
+class TestClarificationWithoutDocuments:
+    @pytest.fixture
+    def asked(self, ask, ai):
+        ai.search_result = {"chunks": [], "failed_sources": []}
+        ai.reply = "어떤 기간에 관한 질문인가요?"
+        ai.reply_clarification = True
+        ask("기간이 얼마나 됨?")
+        ai.small_talk_calls.clear()
+        return ask
+
+    def test_next_search_keeps_previous_question(self, asked, ai):
+        asked("연차요")
+        assert ai.search_calls[-1] == "기간이 얼마나 됨?\n연차요"
+
+    def test_reply_to_clarification_skips_small_talk(self, asked, ai):
+        ai.small_talk = 0.99
+        asked("네")
+        assert ai.small_talk_calls == [] and len(ai.search_calls) == 2
+
+    def test_does_not_clarify_twice(self, asked, ai):
+        asked("글쎄")
+        assert ai.reply_allowed == [True, False]
+        asked("연차요")
+        # 표시를 다시 붙이지 않아 다음 말은 일반 질문으로 처리한다
+        assert ai.search_calls[-1] == "연차요" and ai.reply_allowed[-1] is True
