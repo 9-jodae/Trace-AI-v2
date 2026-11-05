@@ -229,3 +229,50 @@ class TestAnswerRetry:
 def test_prompts_cover_counts_tables_and_quotes():
     assert "전체 수는 알 수 없고" in SYSTEM_PROMPT and '\\"' in SYSTEM_PROMPT
     assert "표는 그 행 전체" in EDIT_REQUEST_INSTRUCTION and "설명 문장" in EDIT_REQUEST_INSTRUCTION
+
+
+class TestConflictScan:
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "여기서 각 문서 간 같은 내용인데 다른 말로 기재된 충돌 발생 문서 있는지 찾아줘",
+            "지금 발생한 문서 충돌 알려줘",
+            "전체 문서에서 모순 찾아줘",
+            "어떤 문서가 서로 다른 값인지 알려줘",
+        ],
+    )
+    def test_overview_questions_match(self, text):
+        assert graph._is_conflict_scan(text)
+
+    @pytest.mark.parametrize("text", ["연차 이월 충돌이 뭐야?", "연차 며칠이야?", "문서 몇 개야?", "안녕"])
+    def test_specific_questions_do_not_match(self, text):
+        assert not graph._is_conflict_scan(text)
+
+    def test_search_adds_terms_for_scan_only(self):
+        scan = graph._search_query(TestGraph.state("지금 발생한 문서 충돌 알려줘"))
+        assert "일치하지 않" in scan
+        assert graph._search_query(TestGraph.state("연차 며칠이야?")) == "연차 며칠이야?"
+
+    @pytest.mark.anyio
+    async def test_answer_call_receives_scan_flag(self, monkeypatch):
+        seen = {}
+
+        async def generate(question, context, history, **kwargs):
+            seen.update(kwargs)
+            return json.dumps({"answer": "찾았습니다."}, ensure_ascii=False)
+
+        monkeypatch.setattr(graph, "generate_answer", generate)
+        await graph._answer_with_documents(TestGraph.state("지금 발생한 문서 충돌 알려줘"), CONTEXT, None)
+        assert seen == {"conflict_scan": True}
+
+    @pytest.mark.anyio
+    async def test_scan_is_not_small_talk_and_does_not_reuse(self, monkeypatch):
+        async def high(_question):
+            return 0.99
+
+        monkeypatch.setattr(config, "jev_api_key", lambda: "k")
+        monkeypatch.setattr(graph, "small_talk_probability", high)
+        monkeypatch.setattr(graph, "edit_request_probability", high)
+        state = TestGraph.state("지금 발생한 문서 충돌 알려줘")
+        assert (await graph.judge_small_talk(state))["small_talk"] is False
+        assert (await graph.judge_context({**state, "context": CONTEXT}))["route"] == "SEARCH"

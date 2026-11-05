@@ -16,6 +16,7 @@ from app.core.schemas import AccessScope, SearchFilters
 from app.jev.client import can_answer_probability, edit_request_probability, small_talk_probability
 from app.llm.client import (
     CLARIFICATION_KEY,
+    CONFLICT_SCAN_SEARCH_TERMS,
     NO_EVIDENCE_ANSWER,
     generate_answer,
     generate_reply_without_documents,
@@ -34,6 +35,11 @@ SMALL_TALK_THRESHOLD = 0.9
 # 잘못 판단해도 제안만 나가고 문서는 바뀌지 않는다. 일반 질문에 제안이 붙지 않게 높게 잡는다
 EDIT_REQUEST_THRESHOLD = 0.8
 # 값을 직접 바꾸라는 말은 판단 모델이 놓쳐도 제안으로 보낸다. "수정 방법이 뭐야" 같은 질문은 걸리지 않는다
+# "각 문서 간 충돌 찾아줘"처럼 주제 없이 문서 전체의 충돌을 묻는 말. "연차 이월 충돌이 뭐야?"는 해당하지 않는다
+CONFLICT_SCAN_PATTERN = re.compile(
+    r"(?=.*(문서|전체|모든|어떤|지금|발생))(?=.*(충돌|모순|불일치|상충|다르게|서로 다른|내용이 다른|값이 다른))"
+    r"(?=.*(있는지|있어|있나|찾아|알려|보여|확인|목록|어디))"
+)
 EDIT_REQUEST_PATTERN = re.compile(
     r"(수정|변경|반영|통일|해결|교체|정정)\s*(을|를)?\s*(해\s*(줘|주세요|주라|봐|라)|하자|부탁)"
     r"|(바꿔|고쳐|맞춰|바꾸어|고치어)\s*(줘|주세요|주라|봐|라)?\s*(줘|주세요|$|[.!])"
@@ -90,6 +96,7 @@ async def judge_small_talk(state: AgentState) -> dict:
     return {
         # 수정 요청은 문서를 찾아야 하므로 일상 대화로 보내지 않는다
         "small_talk": not edit_request
+        and not _is_conflict_scan(question)
         and not isinstance(small_talk_result, Exception)
         and small_talk_result >= SMALL_TALK_THRESHOLD,
         "edit_request": edit_request,
@@ -123,6 +130,9 @@ async def small_talk(state: AgentState) -> dict:
 
 async def judge_context(state: AgentState) -> dict:
     decision = {"route": "SEARCH", "context_probability": None, "failed_sources": [], "fallback_reason": None}
+    # 이전 근거로 답하면 다른 문서의 충돌을 볼 수 없으므로 새로 검색한다
+    if _is_conflict_scan(state["messages"][-1].text):
+        return decision
     context = state.get("context")
     if not context:
         return decision
@@ -161,8 +171,15 @@ def _follows_clarification(state: AgentState) -> bool:
     return bool(history) and is_clarification(history[-1])
 
 
+def _is_conflict_scan(question: str) -> bool:
+    return CONFLICT_SCAN_PATTERN.match(question) is not None
+
+
 def _search_query(state: AgentState) -> str:
     question = state["messages"][-1].text
+    # 질문 문장만으로는 어떤 문서도 가깝지 않으므로 불일치를 밝히는 표현으로 찾는다
+    if _is_conflict_scan(question):
+        return f"{question}\n{CONFLICT_SCAN_SEARCH_TERMS}"
     # "숙박비요"처럼 되물음에 답한 말은 그것만으로 검색하면 질문의 뜻을 잃는다
     # "최대 5일로 수정해줘"도 앞선 질문 없이는 어떤 문서인지 알 수 없다
     if not FOLLOW_UP_PATTERN.match(question) and not _follows_clarification(state) and not state.get("edit_request"):
@@ -220,6 +237,8 @@ async def _answer_with_documents(state: AgentState, context: list[Chunk], altern
         question = f"{question}\n(같은 뜻의 다른 표기: {alternate_query})"
     edit_request = state.get("edit_request", False)
     extra = {"edit_request": True} if edit_request else {}
+    if _is_conflict_scan(question):
+        extra["conflict_scan"] = True
     response = await generate_answer(question, context, _history(state), **extra)
     try:
         answer, evidence, clarification, keywords = parse_answer(response, context)

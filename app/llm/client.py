@@ -91,6 +91,13 @@ EDIT_REQUEST_INSTRUCTION = """이번 말은 문서 수정 요청이다. 문서�
 - JSON에 다음 항목을 더한다. 문서마다 바꿀 문장을 각각 담는다.
 "edits": [{"chunk": 1, "before": "컨텍스트 원문을 한 글자도 바꾸지 않고 복사한 문장",
  "after": "수정한 문장", "reason": "이유"}]"""
+# 문서 전체의 충돌을 찾아 달라는 말에 쓴다. 검색 결과만 볼 수 있으므로 범위를 밝히게 한다
+CONFLICT_SCAN_INSTRUCTION = """이번 말은 특정 내용이 아니라 문서 간 충돌을 찾아 달라는 요청이다.
+- 거절 문장을 쓰지 않는다. 컨텍스트에서 값이나 내용이 서로 다른 문서 쌍, 불일치를 스스로 밝힌 문서를 찾아
+  문서명과 값을 쓴다.
+- 찾은 것 뒤에 이번 검색에 걸린 문서만 본 결과이고 전체 문서를 점검한 것은 아니라고 쓴다.
+- 찾지 못했으면 이번 검색 범위에서는 찾지 못했다고 쓰고, 주제를 정해 물어보면 더 정확하다고 안내한다."""
+CONFLICT_SCAN_SEARCH_TERMS = "일치하지 않 다르게 적혀 충돌 개정 여부 확인 필요"
 CLARIFICATION_KEY = "clarification"
 NO_REPEAT_CLARIFICATION = "직전에 이미 되물었으므로 이번에는 되묻지 말고 답하거나 거절 문장을 쓴다."
 # 문서가 없으므로 답하라는 말이 사실을 지어내는 신호가 되지 않게 거절만 허용한다
@@ -107,7 +114,11 @@ def is_clarification(message: BaseMessage) -> bool:
 
 
 def build_prompt(
-    question: str, context: list[Chunk], allow_clarification: bool = True, edit_request: bool = False
+    question: str,
+    context: list[Chunk],
+    allow_clarification: bool = True,
+    edit_request: bool = False,
+    conflict_scan: bool = False,
 ) -> str:
     chunks = "\n".join(
         f"{number}. [{_neutralize_tags(chunk['source'] or '출처 미상')}] {_neutralize_tags(chunk['text'])}"
@@ -116,6 +127,8 @@ def build_prompt(
     prompt = f"<context>\n{chunks}\n</context>\n\n질문: {question}"
     if edit_request:
         prompt = f"{prompt}\n\n{EDIT_REQUEST_INSTRUCTION}"
+    if conflict_scan:
+        prompt = f"{prompt}\n\n{CONFLICT_SCAN_INSTRUCTION}"
     return prompt if allow_clarification else f"{prompt}\n\n{NO_REPEAT_CLARIFICATION}"
 
 
@@ -135,13 +148,19 @@ async def _invoke(model_name: str, messages: list[BaseMessage]) -> str:
 
 
 async def generate_answer(
-    question: str, context: list[Chunk], history: list[BaseMessage], edit_request: bool = False
+    question: str,
+    context: list[Chunk],
+    history: list[BaseMessage],
+    edit_request: bool = False,
+    conflict_scan: bool = False,
 ) -> str:
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),
         *history,
         HumanMessage(
-            content=build_prompt(question, context, not (history and is_clarification(history[-1])), edit_request)
+            content=build_prompt(
+                question, context, not (history and is_clarification(history[-1])), edit_request, conflict_scan
+            )
         ),
     ]
     return await generate_structured_response(messages)
