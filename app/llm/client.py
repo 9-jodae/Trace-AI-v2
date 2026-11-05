@@ -106,7 +106,6 @@ REGISTERED_CONFLICTS_INSTRUCTION = """<registered_conflicts>는 문서 관리에
 - 답변 첫머리에 목록의 충돌을 모두 쓴다. 문서명, 항목, 컨텍스트 원문에서 찾은 각 문서의 값을 쓴다.
 - 원문에서 값을 찾지 못했거나 값이 같으면 등록돼 있지만 원문으로 확인하지 못했다고 쓰고, 값을 추측하지 않는다.
 - 목록을 쓴 뒤 등록되지 않은 충돌은 이번 검색에 걸린 문서만 봤다고 쓴다."""
-REGISTERED_CONFLICTS_PARTIAL = "등록된 충돌 중 일부만 다뤘다고 함께 쓴다."
 MAX_REGISTERED_ITEM_LENGTH = 200
 CONFLICT_SCAN_SEARCH_TERMS = "일치하지 않 다르게 적혀 충돌 개정 여부 확인 필요"
 CLARIFICATION_KEY = "clarification"
@@ -125,14 +124,20 @@ def _registered_text(text: str) -> str:
     return " ".join(text.replace("<", " ").replace(">", " ").split())[:MAX_REGISTERED_ITEM_LENGTH]
 
 
-def _registered_conflicts_block(conflicts: list[RegisteredConflict], partial: bool) -> str:
+def _skipped_conflicts_note(skipped: int, filters_applied: bool) -> str:
+    note = f"등록된 충돌 중 {skipped}건은 이번에 다루지 않았다고 쓴다."
+    if filters_applied:
+        return f"{note} 질문에 건 필터 밖 문서 때문일 수 있으니 필터를 풀고 다시 물어보라고 안내한다."
+    return note
+
+
+def _registered_conflicts_block(conflicts: list[RegisteredConflict]) -> str:
     lines = "\n".join(
         f"- {_registered_text(conflict['item'])}: "
         f"{_registered_text(conflict['source'])} / {_registered_text(conflict['other_source'])}"
         for conflict in conflicts
     )
-    block = f"<registered_conflicts>\n{lines}\n</registered_conflicts>\n\n{REGISTERED_CONFLICTS_INSTRUCTION}"
-    return f"{block}\n{REGISTERED_CONFLICTS_PARTIAL}" if partial else block
+    return f"<registered_conflicts>\n{lines}\n</registered_conflicts>\n\n{REGISTERED_CONFLICTS_INSTRUCTION}"
 
 
 def is_clarification(message: BaseMessage) -> bool:
@@ -146,7 +151,8 @@ def build_prompt(
     edit_request: bool = False,
     conflict_scan: bool = False,
     registered_conflicts: list[RegisteredConflict] | None = None,
-    registered_partial: bool = False,
+    skipped_conflicts: int = 0,
+    filters_applied: bool = False,
 ) -> str:
     chunks = "\n".join(
         f"{number}. [{_neutralize_tags(chunk['source'] or '출처 미상')}] {_neutralize_tags(chunk['text'])}"
@@ -158,7 +164,9 @@ def build_prompt(
     if conflict_scan:
         prompt = f"{prompt}\n\n{CONFLICT_SCAN_INSTRUCTION}"
     if registered_conflicts:
-        prompt = f"{prompt}\n\n{_registered_conflicts_block(registered_conflicts, registered_partial)}"
+        prompt = f"{prompt}\n\n{_registered_conflicts_block(registered_conflicts)}"
+    if skipped_conflicts:
+        prompt = f"{prompt}\n{_skipped_conflicts_note(skipped_conflicts, filters_applied)}"
     return prompt if allow_clarification else f"{prompt}\n\n{NO_REPEAT_CLARIFICATION}"
 
 
@@ -184,7 +192,8 @@ async def generate_answer(
     edit_request: bool = False,
     conflict_scan: bool = False,
     registered_conflicts: list[RegisteredConflict] | None = None,
-    registered_partial: bool = False,
+    skipped_conflicts: int = 0,
+    filters_applied: bool = False,
 ) -> str:
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),
@@ -197,7 +206,8 @@ async def generate_answer(
                 edit_request,
                 conflict_scan,
                 registered_conflicts,
-                registered_partial,
+                skipped_conflicts,
+                filters_applied,
             )
         ),
     ]
