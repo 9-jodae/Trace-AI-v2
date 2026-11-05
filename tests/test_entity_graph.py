@@ -155,6 +155,7 @@ async def test_prompt_lists_allowed_values_and_raises_output_limit(monkeypatch):
     await entity_extraction.extract_entity_graph("doc-1", "version-1", [make_chunk()])
     for allowed in get_args(AssertionPolarity) + get_args(AssertionModality) + get_args(RelationPredicate):
         assert allowed in captured["system"]
+    assert "일반 표현은 관계의 주어로 쓰지 않는다" in captured["system"]
     assert captured["max_tokens"] == entity_extraction.EXTRACTION_MAX_OUTPUT_TOKENS
 
 
