@@ -33,7 +33,8 @@ python3 -m venv .venv
 | `EMBEDDING_DIMENSIONS` | `1024` | |
 | `BEDROCK_REGION` | `ap-northeast-1` | Titan과 Haiku 호출 리전. 서버의 `AWS_REGION`은 `ap-southeast-1`이라 따로 지정 |
 | `LLM_MODEL` | `bedrock:global.anthropic.claude-sonnet-5-5` | Haiku 권한이 열리지 않아 Sonnet 5.5 사용. `global.` 프로필은 요청을 다른 리전에서 처리할 수 있음 |
-| `NEO4J_URI`, `JEV_API_KEY` | 비움 | 중간 발표 범위 밖 |
+| `JEV_API_KEY` | TypeSafe 키 | 기존 컨텍스트 재사용 판단에 사용. 질문과 청크 본문이 TypeSafe로 전송됨 |
+| `NEO4J_URI` | 비움 | 중간 발표 범위 밖 |
 
 `USE_SAMPLE_DATA`와 `ACCESS_*`, `EMBEDDING_PROXY_URL`은 넣지 않습니다. 운영 모드에서 샘플 설정은 시작 실패이고, 나머지는 무시합니다.
 
