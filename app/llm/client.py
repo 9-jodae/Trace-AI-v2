@@ -71,6 +71,8 @@ NO_DOCUMENT_PROMPT = f"""사내 문서 도우미로 대화한다. 지금은 관�
 {{"answer": "답변", "clarification": false}}"""
 CLARIFICATION_KEY = "clarification"
 NO_REPEAT_CLARIFICATION = "직전에 이미 되물었으므로 이번에는 되묻지 말고 답하거나 거절 문장을 쓴다."
+# 문서가 없으므로 답하라는 말이 사실을 지어내는 신호가 되지 않게 거절만 허용한다
+NO_REPEAT_WITHOUT_DOCUMENTS = "직전에 이미 되물었으므로 이번에는 되묻지 말고 거절 문장을 쓴다."
 
 
 def _neutralize_tags(text: str) -> str:
@@ -138,7 +140,7 @@ def _parse_no_document_reply(reply: str) -> NoDocumentReply:
 
 async def generate_reply_without_documents(question: str, allow_clarification: bool = True) -> NoDocumentReply:
     # 이전 대화의 문서 내용을 다시 쓰지 않도록 대화 기록을 넘기지 않는다
-    content = question if allow_clarification else f"{question}\n\n{NO_REPEAT_CLARIFICATION}"
+    content = question if allow_clarification else f"{question}\n\n{NO_REPEAT_WITHOUT_DOCUMENTS}"
     messages = [SystemMessage(content=NO_DOCUMENT_PROMPT), HumanMessage(content=content)]
     # 응대 모델을 쓰지 못해도 답변 모델로 응대한다
     reply = await generate_structured_response(messages, config.chat_llm_model(), config.llm_model())

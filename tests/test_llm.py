@@ -326,4 +326,5 @@ class TestReplyWithoutDocuments:
         calls, replies = models
         replies.append("{}")
         asyncio.run(llm.generate_reply_without_documents("연차요", False))
-        assert calls[0][1][-1].content.endswith(llm.NO_REPEAT_CLARIFICATION)
+        assert calls[0][1][-1].content.endswith(llm.NO_REPEAT_WITHOUT_DOCUMENTS)
+        assert "답하거나" not in calls[0][1][-1].content
