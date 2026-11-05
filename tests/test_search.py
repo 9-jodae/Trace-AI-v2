@@ -67,7 +67,7 @@ class FakeStore:
             raise self.filter_error
         return set(chunk_ids) if self.accessible is None else self.accessible
 
-    async def fetch_accessible(self, chunk_ids, scope, filters=None):
+    async def fetch_accessible(self, chunk_ids, scope, filters=None, embedding=None):
         self.filter_calls.append((chunk_ids, scope, filters))
         if self.filter_error:
             raise self.filter_error

@@ -60,6 +60,21 @@ JOIN document_versions dv ON dv.id = c.document_version_id
 JOIN documents d ON d.id = dv.document_id
 ORDER BY r.ordinality
 """
+FETCH_ACCESSIBLE_WITH_VECTOR_SQL = """
+WITH requested AS (
+    SELECT chunk_id, ordinality
+    FROM unnest(%s::uuid[]) WITH ORDINALITY AS ids(chunk_id, ordinality)
+)
+SELECT c.id::text AS id, c.content AS text, d.title AS source, dv.document_id::text AS document_id,
+       c.document_version_id::text AS version_id, c.char_start, c.char_end
+FROM requested r
+JOIN accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
+  ON c.id = r.chunk_id
+JOIN document_versions dv ON dv.id = c.document_version_id
+JOIN documents d ON d.id = dv.document_id
+WHERE c.embedding IS NOT NULL AND c.embedding <=> %s::vector <= %s
+ORDER BY r.ordinality
+"""
 ACCESSIBLE_DOCUMENT_IDS_SQL = """
 SELECT DISTINCT dv.document_id::text AS id
 FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s::text[], %s::text[], %s::date, %s::date) c
@@ -119,7 +134,11 @@ class VectorStore(Protocol):
     ) -> set[str]: ...
 
     async def fetch_accessible(
-        self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
+        self,
+        chunk_ids: list[str],
+        scope: AccessScope | None,
+        filters: SearchFilters | None = None,
+        embedding: list[float] | None = None,
     ) -> list[Chunk]: ...
 
     async def accessible_document_ids(
@@ -234,10 +253,20 @@ class PostgresVectorStore:
         return {row["id"] for row in rows}
 
     async def fetch_accessible(
-        self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
+        self,
+        chunk_ids: list[str],
+        scope: AccessScope | None,
+        filters: SearchFilters | None = None,
+        embedding: list[float] | None = None,
     ) -> list[Chunk]:
         if scope is None or not chunk_ids:
             return []
+        if embedding is not None:
+            vector = _to_vector(embedding)
+            return await self._read(
+                FETCH_ACCESSIBLE_WITH_VECTOR_SQL,
+                (chunk_ids, *scope, *_filter_params(filters), vector, config.vector_max_cosine_distance()),
+            )
         rows = await self._read(FETCH_ACCESSIBLE_SQL, (chunk_ids, *scope, *_filter_params(filters)))
         return rows
 
@@ -333,10 +362,24 @@ class SampleVectorStore:
         return set(chunk_ids)
 
     async def fetch_accessible(
-        self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None
+        self,
+        chunk_ids: list[str],
+        scope: AccessScope | None,
+        filters: SearchFilters | None = None,
+        embedding: list[float] | None = None,
     ) -> list[Chunk]:
         by_id = {chunk["id"]: chunk for chunk in SAMPLE_CHUNKS}
-        return [by_id[chunk_id] for chunk_id in chunk_ids if chunk_id in by_id]
+        rows = [by_id[chunk_id] for chunk_id in chunk_ids if chunk_id in by_id]
+        if embedding is None:
+            return rows
+        if self._embeddings is None:
+            self._embeddings = await embed_documents([chunk["text"] for chunk in SAMPLE_CHUNKS])
+        embeddings = dict(zip((chunk["id"] for chunk in SAMPLE_CHUNKS), self._embeddings, strict=True))
+        return [
+            chunk
+            for chunk in rows
+            if 1 - _cosine(embedding, embeddings[chunk["id"]]) <= config.vector_max_cosine_distance()
+        ]
 
     async def accessible_document_ids(
         self, document_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None

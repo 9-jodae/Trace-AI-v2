@@ -262,6 +262,22 @@ class TestPostgresVectorStore:
         assert "dv.document_id = ANY(%s::uuid[])" in sql
         assert params == (*SCOPE, None, ["POLICY"], None, None, None, ["doc-a", "doc-b"])
 
+    def test_graph_chunks_use_existing_cosine_distance_cutoff(self, connect):
+        connection = FakeConnection(rows=[chunk("a")])
+        connect(connection)
+        filters = SearchFilters(extensions=["pdf"])
+        result = asyncio.run(
+            stores.PostgresVectorStore("x").fetch_accessible(["a", "b"], SCOPE, filters, [0.25, 0.75])
+        )
+        assert result == [chunk("a")]
+        sql, params = data_statements(connection)[0]
+        assert "c.embedding IS NOT NULL" in sql
+        assert "c.embedding <=> %s::vector <= %s" in sql
+        assert params == (
+            ["a", "b"], *SCOPE, ["pdf"], None, None, None, None,
+            "[0.25,0.75]", stores.config.DEFAULT_VECTOR_MAX_COSINE_DISTANCE,
+        )
+
     @pytest.mark.parametrize("ids, scope", [(["a"], None), ([], SCOPE)])
     def test_fetch_accessible_without_ids_or_scope_does_not_connect(self, ids, scope):
         assert asyncio.run(stores.PostgresVectorStore("x").fetch_accessible(ids, scope)) == []

@@ -91,9 +91,11 @@ async def search(
         # 권한 범위를 모르면 어떤 문서도 근거로 내보내지 않는다. 임베딩 비용도 쓰지 않는다
         logger.warning("Search skipped: no access scope")
         return {"chunks": [], "failed_sources": []}
+    # 하나의 질문 벡터를 벡터 검색과 그래프 후보 관련도 검증에 공유한다.
+    query_embedding = asyncio.create_task(embed_query(query))
 
     async def search_vector() -> list[Chunk]:
-        return await vector_store.search(await embed_query(query), SOURCE_LIMIT, scope, filters)
+        return await vector_store.search(await query_embedding, SOURCE_LIMIT, scope, filters)
 
     async def search_graph() -> list[Chunk]:
         # Neo4j 제목 매칭 결과를 먼저 PostgreSQL에서 허용된 현재 문서인지 확인한 뒤에만 관계를 확장한다.
@@ -106,7 +108,14 @@ async def search(
         candidate_ids = await graph_store.search_from_documents(
             [document_id for document_id in seed_ids if document_id in allowed_seed_ids], GRAPH_CANDIDATE_LIMIT
         )
-        return await vector_store.fetch_accessible(candidate_ids[:GRAPH_CANDIDATE_LIMIT], scope, filters)
+        try:
+            embedding = await query_embedding
+        except Exception:
+            # 질문 임베딩 장애에도 명시적 문서 관계 검색은 계속 제공한다.
+            embedding = None
+        return await vector_store.fetch_accessible(
+            candidate_ids[:GRAPH_CANDIDATE_LIMIT], scope, filters, embedding
+        )
 
     names = ["vector", "graph"]
     results = await asyncio.gather(search_vector(), search_graph(), return_exceptions=True)
