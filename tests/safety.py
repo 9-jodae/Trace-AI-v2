@@ -18,6 +18,7 @@ FAKE_ENV = {
     "LLM_MODEL": "fake:fake-llm",
     "LLM_FALLBACK_MODEL": "",
     "DATABASE_URL": "",
+    "DB_POOL_MAX_SIZE": "",
     "MAX_CONVERSATIONS": "",
     "CONVERSATION_TTL_SECONDS": "",
     "REQUEST_TIMEOUT_SECONDS": "",
