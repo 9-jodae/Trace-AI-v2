@@ -122,6 +122,11 @@ def llm_model() -> str | None:
     return os.getenv("LLM_MODEL") or None
 
 
+def chat_llm_model() -> str | None:
+    """문서 없이 응대할 때 쓰는 모델. 비우면 LLM_MODEL을 쓴다."""
+    return os.getenv("CHAT_LLM_MODEL") or llm_model()
+
+
 def llm_fallback_model() -> str | None:
     return os.getenv("LLM_FALLBACK_MODEL") or None
 

@@ -63,6 +63,33 @@ class FakeAi:
         self.jev_calls = []
         self.search_calls = []
         self.llm_calls = []
+        self.small_talk = 0.0
+        self.small_talk_calls = []
+        self.reply = graph.NO_EVIDENCE_ANSWER
+        self.reply_clarification = False
+        self.reply_calls = []
+        self.reply_allowed = []
+        self.rewrite = None
+        self.rewrite_calls = []
+
+    async def small_talk_probability(self, question):
+        self.small_talk_calls.append(question)
+        if isinstance(self.small_talk, Exception):
+            raise self.small_talk
+        return self.small_talk
+
+    async def rewrite_query(self, question):
+        self.rewrite_calls.append(question)
+        if isinstance(self.rewrite, Exception):
+            raise self.rewrite
+        return self.rewrite
+
+    async def generate_reply(self, question, allow_clarification=True):
+        self.reply_calls.append(question)
+        self.reply_allowed.append(allow_clarification)
+        if isinstance(self.reply, Exception):
+            raise self.reply
+        return llm_client.NoDocumentReply(self.reply, self.reply_clarification)
 
     async def can_answer(self, question, context, history):
         self.jev_calls.append({"question": question, "context": context, "history": history})
@@ -93,6 +120,9 @@ class FakeAi:
 def ai(monkeypatch):
     fake = FakeAi()
     monkeypatch.setattr(graph, "can_answer_probability", fake.can_answer)
+    monkeypatch.setattr(graph, "small_talk_probability", fake.small_talk_probability)
+    monkeypatch.setattr(graph, "generate_reply_without_documents", fake.generate_reply)
+    monkeypatch.setattr(graph, "rewrite_search_query", fake.rewrite_query)
     monkeypatch.setattr(graph, "search", fake.search)
     monkeypatch.setattr(graph, "filter_accessible_context", fake.filter_context)
     monkeypatch.setattr(graph, "generate_answer", fake.generate)

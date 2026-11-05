@@ -71,22 +71,22 @@ class TestGroundEvidence:
 class TestParseAnswer:
     def test_returns_answer_and_grounded_evidence(self):
         response = '{"answer": "15일입니다.", "evidence": [{"chunk": 2, "quote": "%s"}]}' % QUOTE
-        answer, evidence = parse_answer(response, CONTEXT)
+        answer, evidence = parse_answer(response, CONTEXT)[:2]
         assert answer == "15일입니다." and [item["chunk_id"] for item in evidence] == ["b"]
 
     def test_code_fence_is_accepted(self):
         response = '```json\n{"answer": "답", "evidence": []}\n```'
-        assert parse_answer(response, CONTEXT) == ("답", [])
+        assert parse_answer(response, CONTEXT)[:2] == ("답", [])
 
     def test_missing_evidence_is_empty(self):
-        assert parse_answer('{"answer": "답"}', CONTEXT) == ("답", [])
+        assert parse_answer('{"answer": "답"}', CONTEXT)[:2] == ("답", [])
 
     def test_forged_quote_keeps_answer_only(self):
         response = '{"answer": "답", "evidence": [{"chunk": 2, "quote": "없는 문구"}]}'
-        assert parse_answer(response, CONTEXT) == ("답", [])
+        assert parse_answer(response, CONTEXT)[:2] == ("답", [])
 
     def test_plain_text_is_kept_without_evidence(self, caplog):
-        assert parse_answer("그냥 답변", CONTEXT) == ("그냥 답변", [])
+        assert parse_answer("그냥 답변", CONTEXT)[:2] == ("그냥 답변", [])
         assert "그냥 답변" not in caplog.text
 
     def test_fenced_plain_text_is_kept_without_evidence(self):
@@ -104,7 +104,7 @@ class TestParseAnswer:
     )
     def test_broken_json_is_not_shown_to_user(self, response):
         with pytest.raises(AiUnavailableError) as error:
-            parse_answer(response, CONTEXT)
+            parse_answer(response, CONTEXT)[:2]
         assert "잘린" not in str(error.value)
 
     @pytest.mark.parametrize(
@@ -112,7 +112,7 @@ class TestParseAnswer:
         ['"문구"', "null", '[{"chunk": "2", "quote": "문구"}]', '[1, {"quote": "문구"}]'],
     )
     def test_malformed_evidence_keeps_answer(self, evidence):
-        assert parse_answer(f'{{"answer": "답", "evidence": {evidence}}}', CONTEXT) == ("답", [])
+        assert parse_answer(f'{{"answer": "답", "evidence": {evidence}}}', CONTEXT)[:2] == ("답", [])
 
     def test_malformed_item_keeps_other_quotes(self):
         response = '{"answer": "답", "evidence": [{"chunk": "2", "quote": "x"}, {"chunk": 2, "quote": "%s"}]}' % QUOTE
@@ -120,34 +120,61 @@ class TestParseAnswer:
 
     def test_parse_failure_log_has_no_content(self, caplog):
         with pytest.raises(AiUnavailableError):
-            parse_answer('{"answer": "비밀 본문', CONTEXT)
+            parse_answer('{"answer": "비밀 본문', CONTEXT)[:2]
         assert "LLM answer parse failed" in caplog.text and "비밀" not in caplog.text
 
     def test_no_evidence_answer_cannot_append_guesses(self):
         response = '{"answer": "관련 문서를 찾지 못했습니다. 인사팀에 문의하세요.", "evidence": []}'
-        assert parse_answer(response, CONTEXT) == ("관련 문서를 찾지 못했습니다.", [])
+        assert parse_answer(response, CONTEXT)[:2] == ("관련 문서를 찾지 못했습니다.", [])
 
     def test_partial_answer_with_grounded_quote_is_kept(self):
         answer = "관련 문서를 찾지 못했습니다. 다만 15일 기준은 있습니다."
         response = '{"answer": "%s", "evidence": [{"chunk": 2, "quote": "%s"}]}' % (answer, QUOTE)
-        result, evidence = parse_answer(response, CONTEXT)
+        result, evidence = parse_answer(response, CONTEXT)[:2]
         assert result == answer and len(evidence) == 1
 
     def test_text_before_fenced_json_is_not_shown(self):
         body = '{"answer": "최종 답", "evidence": [{"chunk": 2, "quote": "%s"}]}' % QUOTE
         response = f"설명 문장입니다.\n\n```json\n{body}\n```"
-        answer, evidence = parse_answer(response, CONTEXT)
+        answer, evidence = parse_answer(response, CONTEXT)[:2]
         assert answer == "최종 답" and [item["quote"] for item in evidence] == [QUOTE]
 
     def test_text_around_json_without_fence_is_dropped(self):
-        assert parse_answer('앞 {"answer": "답"} 뒤', CONTEXT) == ("답", [])
+        assert parse_answer('앞 {"answer": "답"} 뒤', CONTEXT)[:2] == ("답", [])
 
     def test_truncated_json_after_text_is_not_shown(self):
         with pytest.raises(AiUnavailableError):
-            parse_answer('설명\n{"answer": "잘린', CONTEXT)
+            parse_answer('설명\n{"answer": "잘린', CONTEXT)[:2]
 
     def test_real_newline_in_answer_is_accepted(self):
         assert parse_answer('{"answer": "첫 줄\n둘째 줄"}', CONTEXT)[0] == "첫 줄\n둘째 줄"
+
+    @pytest.mark.parametrize(
+        "options, clarifying",
+        [
+            ('[{"label": "숙박비", "chunk": 1}, {"label": "할인", "chunk": 2}]', True),
+            ('[{"label": "숙박비", "chunk": 1}]', False),
+            ('[{"label": "가", "chunk": 1}, {"label": "나", "chunk": 1}]', False),
+            ('[{"label": "가", "chunk": 1}, {"label": "나", "chunk": 9}]', False),
+            ('[{"label": "가", "chunk": "1"}, {"label": "나", "chunk": 2}]', False),
+            ('[{"label": " ", "chunk": 1}, {"label": "나", "chunk": 2}]', False),
+            ("[]", False),
+            ('"숙박비"', False),
+        ],
+    )
+    def test_clarification_needs_two_distinct_chunks(self, options, clarifying):
+        response = '{"answer": "어느 쪽인가요?", "options": %s}' % options
+        assert parse_answer(response, CONTEXT).clarification is clarifying
+
+    def test_clarification_clears_evidence(self):
+        options = '[{"label": "가", "chunk": 1}, {"label": "나", "chunk": 2}]'
+        response = '{"answer": "어느 쪽?", "evidence": [{"chunk": 2, "quote": "%s"}], "options": %s}' % (QUOTE, options)
+        assert parse_answer(response, CONTEXT) == ("어느 쪽?", [], True)
+
+    def test_refusal_wins_over_options(self):
+        options = '[{"label": "가", "chunk": 1}, {"label": "나", "chunk": 2}]'
+        response = '{"answer": "관련 문서를 찾지 못했습니다.", "options": %s}' % options
+        assert parse_answer(response, CONTEXT) == ("관련 문서를 찾지 못했습니다.", [], False)
 
     def test_answer_whitespace_is_trimmed(self):
         assert parse_answer('{"answer": "  답  "}', CONTEXT)[0] == "답"
