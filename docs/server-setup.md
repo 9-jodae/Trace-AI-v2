@@ -39,6 +39,7 @@ python3 -m venv .venv
 | `CHAT_LLM_MODEL` | `bedrock:global.anthropic.claude-haiku-4-5-20251001-v1:0` | 인사처럼 문서 없이 응대할 때 사용. 질문 문장만 전송. 전송 범위는 `docs199-Server#14`에서 합의 요청 중. 비우면 `LLM_MODEL` 사용 |
 | `JEV_API_KEY` | TypeSafe 키 | 일상 대화 판단과 기존 컨텍스트 재사용 판단에 사용. 모든 질문이 TypeSafe로 전송되고 재사용 판단 때는 청크 본문도 전송됨 |
 | `VECTOR_MAX_COSINE_DISTANCE` | `0.85` | 측정 근거는 로컬 실행 안내 참고 |
+| `ENTITY_EXTRACTION_ENABLED` | `true` | 적재할 때 청크 본문을 `LLM_MODEL`로 보내 Entity와 관계를 추출. 끄고 재적재하면 그 문서의 Entity와 관계가 지워짐 |
 | `NEO4J_URI` | 비움 | 값을 넣으면 인덱스가 없어 그래프 검색이 실패로 표시됨. PR #39와 Neo4j 적재 후 사용 |
 
 `USE_SAMPLE_DATA`와 `ACCESS_*`, `EMBEDDING_PROXY_URL`은 넣지 않습니다. 운영 모드에서 샘플 설정은 시작 실패이고, 나머지는 무시합니다.

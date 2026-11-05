@@ -280,7 +280,7 @@ class TestReplyWithoutDocuments:
         calls = []
         replies = []
 
-        async def invoke(model_name, messages):
+        async def invoke(model_name, messages, _max_tokens=None):
             calls.append((model_name, messages))
             reply = replies.pop(0)
             if isinstance(reply, Exception):
@@ -328,3 +328,8 @@ class TestReplyWithoutDocuments:
         asyncio.run(llm.generate_reply_without_documents("연차요", False))
         assert calls[0][1][-1].content.endswith(llm.NO_REPEAT_WITHOUT_DOCUMENTS)
         assert "답하거나" not in calls[0][1][-1].content
+
+
+def test_structured_response_can_raise_output_limit(model):
+    asyncio.run(llm.generate_structured_response([HumanMessage(content="q")], max_tokens=4096))
+    assert model.init_calls[-1][1]["max_tokens"] == 4096
