@@ -6,6 +6,8 @@ from pathlib import Path
 
 from app.retrieval.chunking import chunk_document
 from app.retrieval.embedding import embed_documents
+from app.retrieval.entity_extraction import extract_entity_graph
+from app.retrieval.neo4j_store import Neo4jGraphStore
 from app.retrieval.relations import document_names, resolve_references
 from app.retrieval.schemas import Chunk, DocumentInput
 from app.retrieval.service import close_stores, get_real_stores
@@ -47,6 +49,11 @@ async def index_document(
     await graph_store.replace_document(
         document["document_id"], document["source"], document_names(document), chunks
     )
+    if isinstance(graph_store, Neo4jGraphStore):
+        mentions, assertions = await extract_entity_graph(
+            document["document_id"], document["version_id"], chunks
+        )
+        await graph_store.replace_entity_graph(document["document_id"], document["version_id"], mentions, assertions)
     if update_references:
         catalog = reference_catalog or await _reference_catalog(graph_store)
         await _replace_document_references(graph_store, document, chunks, catalog)
