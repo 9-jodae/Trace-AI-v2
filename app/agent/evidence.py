@@ -1,9 +1,11 @@
 import logging
 import re
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field, StrictInt, ValidationError
+from pydantic import BaseModel, StrictInt, StringConstraints, ValidationError
 from typing_extensions import TypedDict
 
+from app.core.errors import AiUnavailableError
 from app.retrieval.schemas import Chunk
 
 logger = logging.getLogger(__name__)
@@ -18,8 +20,8 @@ class EvidenceCandidate(BaseModel):
 
 
 class AnswerCandidate(BaseModel):
-    answer: str = Field(min_length=1)
-    evidence: list[EvidenceCandidate] = Field(default_factory=list)
+    answer: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    evidence: Any = None
 
 
 class Evidence(TypedDict):
@@ -64,13 +66,28 @@ def ground_evidence(candidates: list[EvidenceCandidate], context: list[Chunk]) -
     return grounded[:MAX_EVIDENCE]
 
 
+def _valid_candidates(raw: Any) -> list[EvidenceCandidate]:
+    # 인용 하나가 형식을 어겨도 답변과 나머지 인용은 살린다
+    candidates = []
+    for item in raw if isinstance(raw, list) else []:
+        try:
+            candidates.append(EvidenceCandidate.model_validate(item))
+        except ValidationError:
+            continue
+    return candidates
+
+
 def parse_answer(response: str, context: list[Chunk]) -> tuple[str, list[Evidence]]:
     text = response.strip()
     fenced = CODE_FENCE_PATTERN.match(text)
-    try:
-        candidate = AnswerCandidate.model_validate_json(fenced.group(1) if fenced else text)
-    except ValidationError:
-        # 근거를 못 읽어도 답변은 살린다. 응답 본문은 기록하지 않는다
+    body = fenced.group(1) if fenced else text
+    if not body.startswith("{"):
+        # 모델이 형식을 무시하고 글로 답하면 근거만 빼고 답변은 살린다. 응답 본문은 기록하지 않는다
         logger.warning("LLM answer is not in the expected format")
         return response, []
-    return candidate.answer, ground_evidence(candidate.evidence, context)
+    try:
+        candidate = AnswerCandidate.model_validate_json(body)
+    except ValidationError as exc:
+        # 잘린 JSON이나 빈 답변을 사용자에게 그대로 보여 주지 않는다
+        raise AiUnavailableError("LLM 응답 형식이 올바르지 않습니다.") from exc
+    return candidate.answer, ground_evidence(_valid_candidates(candidate.evidence), context)

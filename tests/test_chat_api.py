@@ -158,6 +158,17 @@ class TestEvidence:
         ask("q2")
         assert grounded.llm_calls[-1]["history"][-1] == "15일입니다."
 
+    def test_broken_json_is_unavailable_and_not_saved(self, ask, ai, monkeypatch):
+        async def generate(question, context, history):
+            return '{"answer": "잘린'
+
+        monkeypatch.setattr(graph, "generate_answer", generate)
+        response = ask("q")
+        assert response.status_code == 503 and "잘린" not in response.text
+        monkeypatch.setattr(graph, "generate_answer", ai.generate)
+        ask("다음 질문")
+        assert ai.llm_calls[-1]["history"] == []
+
     def test_no_result_has_no_evidence(self, ask, ai):
         ai.search_result = {"chunks": [], "failed_sources": []}
         assert ask("q").json()["evidence"] == []

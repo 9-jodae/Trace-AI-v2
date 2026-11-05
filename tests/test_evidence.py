@@ -1,6 +1,8 @@
+import pytest
 from conftest import chunk
 
 from app.agent.evidence import MAX_EVIDENCE, EvidenceCandidate, ground_evidence, parse_answer
+from app.core.errors import AiUnavailableError
 
 TEXT = "앞부분입니다. 연차는 최대 15일입니다. 뒷부분입니다."
 QUOTE = "연차는 최대 15일입니다."
@@ -78,6 +80,34 @@ class TestParseAnswer:
         assert parse_answer("그냥 답변", CONTEXT) == ("그냥 답변", [])
         assert "그냥 답변" not in caplog.text
 
-    def test_string_chunk_number_is_not_accepted(self):
-        response = '{"answer": "답", "evidence": [{"chunk": "2", "quote": "%s"}]}' % QUOTE
-        assert parse_answer(response, CONTEXT)[1] == []
+    def test_fenced_plain_text_is_kept_without_evidence(self):
+        assert parse_answer("```\n그냥 답변\n```", CONTEXT)[1] == []
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            '{"answer": ""}',
+            '{"answer": "   "}',
+            '{"evidence": []}',
+            '{"answer": "잘린 답',
+            '```json\n{"answer": "  "}\n```',
+        ],
+    )
+    def test_broken_json_is_not_shown_to_user(self, response):
+        with pytest.raises(AiUnavailableError) as error:
+            parse_answer(response, CONTEXT)
+        assert "잘린" not in str(error.value)
+
+    @pytest.mark.parametrize(
+        "evidence",
+        ['"문구"', "null", '[{"chunk": "2", "quote": "문구"}]', '[1, {"quote": "문구"}]'],
+    )
+    def test_malformed_evidence_keeps_answer(self, evidence):
+        assert parse_answer(f'{{"answer": "답", "evidence": {evidence}}}', CONTEXT) == ("답", [])
+
+    def test_malformed_item_keeps_other_quotes(self):
+        response = '{"answer": "답", "evidence": [{"chunk": "2", "quote": "x"}, {"chunk": 2, "quote": "%s"}]}' % QUOTE
+        assert [item["quote"] for item in parse_answer(response, CONTEXT)[1]] == [QUOTE]
+
+    def test_answer_whitespace_is_trimmed(self):
+        assert parse_answer('{"answer": "  답  "}', CONTEXT)[0] == "답"
