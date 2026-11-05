@@ -21,7 +21,7 @@
 
 검색은 벡터와 그래프를 동시에 조회하고, 그래프 후보가 5개 미만이면 PostgreSQL 전문 검색을 더해 RRF로 합칩니다. 전문 검색은 `simple` 설정이라 "연차는"처럼 조사가 붙은 단어는 "연차"와 맞지 않을 수 있습니다.
 
-벡터 검색은 pgvector cosine distance가 `VECTOR_MAX_COSINE_DISTANCE` 이하인 청크만 반환합니다. 기본값은 `0.55`(cosine similarity 0.45 이상)이며, 평가 데이터에 따라 조정할 수 있습니다. 값은 0~2 범위여야 하고, 잘못된 값이면 서버가 시작되지 않습니다.
+벡터 검색은 pgvector cosine distance가 `VECTOR_MAX_COSINE_DISTANCE` 이하인 청크만 반환합니다. 기본값은 `0.85`입니다. 시연 문서 18개에 Titan v2로 질문 15개를 측정해 정했습니다. 관련 질문 9개의 정답 문서는 거리 0.435~0.821이었고, 무관 질문 6개의 1위는 0.827~0.950이었습니다. 표본이 작아 문서가 늘면 다시 재야 합니다. 맞는 문서를 놓치는 쪽이 더 나쁘다고 보아 여유를 두었고, 기준을 통과한 무관 질문은 답변 단계에서 거절합니다. 값은 0~2 범위여야 하고, 잘못된 값이면 서버가 시작되지 않습니다.
 
 권한은 서버의 `accessible_chunks`와 `filter_accessible_chunk_ids`로 판단합니다. 그래프 검색 결과와 재사용할 이전 근거도 `filter_accessible_chunk_ids`를 거치므로, PostgreSQL이 멈추면 그래프 결과도 내보내지 않습니다.
 

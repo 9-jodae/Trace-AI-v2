@@ -44,7 +44,7 @@ class TestConfig:
 
     def test_vector_distance_cutoff_default(self, monkeypatch):
         monkeypatch.delenv("VECTOR_MAX_COSINE_DISTANCE", raising=False)
-        assert config.vector_max_cosine_distance() == 0.55
+        assert config.vector_max_cosine_distance() == config.DEFAULT_VECTOR_MAX_COSINE_DISTANCE == 0.85
 
     def test_vector_distance_cutoff_can_be_configured(self, monkeypatch):
         monkeypatch.setenv("VECTOR_MAX_COSINE_DISTANCE", "0.42")
