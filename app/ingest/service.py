@@ -48,10 +48,15 @@ async def _recheck_conflicts(request: IngestRequest, vector_store, info: dict, t
     # 재적재가 끝난 새 본문을 상대 문서와 비교한다. 해소 여부만 돌려주고 문서 내용은 콜백에 넣지 않는다
     results = []
     for conflict in request.conflicts:
-        other = await vector_store.current_document_text(str(conflict.other_document_id))
-        resolved = other is not None and await is_conflict_resolved(
-            conflict.item, info["title"], text, other[0], other[1]
-        )
+        try:
+            other = await vector_store.current_document_text(str(conflict.other_document_id))
+            resolved = other is not None and await is_conflict_resolved(
+                conflict.item, info["title"], text, other[0], other[1]
+            )
+        except Exception as exc:
+            # 적재는 이미 끝났으므로 작업을 실패로 돌리지 않고 이 충돌의 경고만 유지한다
+            logger.error("Conflict recheck failed: %s", describe_exception(exc))
+            resolved = False
         results.append({"relationId": str(conflict.relation_id), "resolved": resolved})
     return results
 

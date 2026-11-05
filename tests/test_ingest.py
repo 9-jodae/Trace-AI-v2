@@ -247,6 +247,8 @@ class TestConflictRecheck:
         store.other = other
 
         async def text(document_id):
+            if isinstance(store.other, Exception):
+                raise store.other
             return store.other
 
         store.current_document_text = text
@@ -274,6 +276,11 @@ class TestConflictRecheck:
     def test_missing_other_document_keeps_warning(self, monkeypatch, results):
         self.run_with(monkeypatch, other=None)
         assert ("CONFLICTS", [{"relationId": self.RELATION, "resolved": False}]) in results
+
+    def test_read_failure_keeps_warning_and_finishes_job(self, monkeypatch, results):
+        self.run_with(monkeypatch, other=RuntimeError("db down"))
+        assert ("CONFLICTS", [{"relationId": self.RELATION, "resolved": False}]) in results
+        assert ("DONE", None) in results
 
     def test_stale_version_is_not_compared(self, monkeypatch, results):
         self.run_with(monkeypatch, chunks=())
