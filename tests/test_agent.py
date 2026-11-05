@@ -109,7 +109,7 @@ class TestNoResults:
     def test_fixed_answer_without_llm(self, ask, ai):
         ai.search_result = {"chunks": [], "failed_sources": []}
         body = ask("q").json()
-        assert body["answer"] == graph.NO_RESULT_ANSWER and body["sources"] == [] and ai.llm_calls == []
+        assert body["answer"] == graph.NO_EVIDENCE_ANSWER and body["sources"] == [] and ai.llm_calls == []
 
     def test_next_question_skips_jev(self, ask, ai):
         ai.search_result = {"chunks": [], "failed_sources": []}

@@ -374,3 +374,54 @@ class TestConnectionPool:
 
     def test_close_without_use_is_safe(self):
         asyncio.run(stores.PostgresVectorStore("x").close())
+
+
+class TestFulltext:
+    @pytest.fixture
+    def read(self, monkeypatch):
+        calls = []
+
+        async def fake(self, sql, params):
+            calls.append((sql, params))
+            return [chunk("a")]
+
+        monkeypatch.setattr(stores.PostgresVectorStore, "_read", fake)
+        return calls
+
+    @pytest.mark.parametrize(
+        "text, expected",
+        [
+            ("제12조 연차", "'제12조':* | '연차':*"),
+            ("a' | b:* & !c", "'a':* | 'b':* | 'c':*"),
+            ("!!! ???", ""),
+        ],
+    )
+    def test_query_escapes_operators(self, text, expected):
+        assert stores.build_fulltext_query(text) == expected
+
+    def test_query_limits_terms(self):
+        query = stores.build_fulltext_query(" ".join(str(i) for i in range(50)))
+        assert query.count(" | ") == stores.MAX_FULLTEXT_TERMS - 1
+
+    def test_search_goes_through_permission_function(self):
+        assert "FROM accessible_chunks(" in stores.FULLTEXT_SEARCH_SQL
+        assert "FROM chunks" not in stores.FULLTEXT_SEARCH_SQL
+
+    def test_params_order(self, read):
+        filters = SearchFilters(extensions=["pdf"])
+        result = asyncio.run(stores.PostgresVectorStore("x").fulltext("연차", 3, SCOPE, filters))
+        assert result == [chunk("a")]
+        expression = "'연차':*"
+        assert read[0][1] == (*SCOPE, ["pdf"], None, None, None, None, expression, expression, 3)
+
+    def test_returns_same_fields_as_vector_search(self):
+        for alias in ["AS id", "AS text", "AS source", "AS document_id", "AS version_id", "char_start", "char_end"]:
+            assert alias in stores.FULLTEXT_SEARCH_SQL
+
+    @pytest.mark.parametrize("query, scope", [("연차", None), ("!!!", SCOPE)])
+    def test_no_scope_or_terms_makes_no_query(self, read, query, scope):
+        assert asyncio.run(stores.PostgresVectorStore("x").fulltext(query, 3, scope)) == []
+        assert read == []
+
+    def test_sample_store_returns_nothing(self):
+        assert asyncio.run(stores.SampleVectorStore().fulltext("재택근무", 3, None)) == []
