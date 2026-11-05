@@ -159,15 +159,15 @@ def build_prompt(
     return prompt if allow_clarification else f"{prompt}\n\n{NO_REPEAT_CLARIFICATION}"
 
 
-@lru_cache(maxsize=3)
-def _build_model(model_name: str, api_key: str | None):
+@lru_cache(maxsize=4)
+def _build_model(model_name: str, api_key: str | None, max_tokens: int = MAX_OUTPUT_TOKENS):
     # Bedrock은 API 키 대신 실행 환경의 AWS 자격 증명을 쓴다
     credentials = config.bedrock_options() if config.uses_aws_credentials(model_name) else {"api_key": api_key}
-    return init_chat_model(model_name, max_retries=MAX_RETRIES, max_tokens=MAX_OUTPUT_TOKENS, **credentials)
+    return init_chat_model(model_name, max_retries=MAX_RETRIES, max_tokens=max_tokens, **credentials)
 
 
-async def _invoke(model_name: str, messages: list[BaseMessage]) -> str:
-    model = _build_model(model_name, config.llm_api_key())
+async def _invoke(model_name: str, messages: list[BaseMessage], max_tokens: int = MAX_OUTPUT_TOKENS) -> str:
+    model = _build_model(model_name, config.llm_api_key(), max_tokens)
     response = await asyncio.wait_for(model.ainvoke(messages), TIMEOUT_SECONDS)
     if not response.text.strip():
         raise EmptyResponseError
@@ -247,7 +247,10 @@ async def generate_reply_without_documents(question: str, allow_clarification: b
 
 
 async def generate_structured_response(
-    messages: list[BaseMessage], model_name: str | None = None, fallback: str | None = None
+    messages: list[BaseMessage],
+    model_name: str | None = None,
+    fallback: str | None = None,
+    max_tokens: int = MAX_OUTPUT_TOKENS,
 ) -> str:
     """같은 모델·재시도·오류 처리를 쓴다. 출력 형식은 호출자가 검증한다."""
     model_name = model_name or config.llm_model()
@@ -260,7 +263,7 @@ async def generate_structured_response(
     failure: Exception | None = None
     for candidate in (model_name, fallback) if fallback and fallback != model_name else (model_name,):
         try:
-            return await _invoke(candidate, messages)
+            return await _invoke(candidate, messages, max_tokens)
         except Exception as exc:
             logger.error("LLM call failed: %s: %s", candidate, describe_exception(exc))
             failure = exc

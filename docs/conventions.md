@@ -16,7 +16,7 @@
 
 - 응답의 핵심 문구(`evidence`) 필드 이름과 Spring 전달 방식. 현재 형식은 임시입니다.
 - PDF 페이지와 `bbox`(`chunks.page`, `chunks.location`). 파서 확정 후 저장합니다.
-- `/ingest` 요청·콜백 필드와 원본 파일 전달 방식
+- `/ingest` 재적재 실패와 처리 중 이전 버전 검색 정책, 문서 유형 값, 저장할 때의 주제 표기 공유. 요청 필드는 Spring 초안(`jobId`, `versionId`, `storageKey`, `extension`) 그대로 받고, 문서 ID와 제목은 버전에서 읽습니다.
 - 대화 맥락 복원을 위한 `conversationId`와 이전 메시지 전달 방식
 - 질문 길이 제한. 현재 2,000자는 임시값입니다.
 
