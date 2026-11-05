@@ -19,13 +19,15 @@
 
 샘플 데이터를 켜지 않으면 `DATABASE_URL`(pgvector)이 필요합니다. 없으면 검색 경로는 503을 반환하며, 샘플로 대체하지 않습니다. 그래프 검색은 선택이라 `NEO4J_URI`를 비우면 벡터 검색만 씁니다. `NEO4J_URI`를 넣으면 `NEO4J_PASSWORD`도 필요합니다. `ENTITY_EXTRACTION_ENABLED`는 기본 꺼짐입니다.
 
+Upstage 임베딩을 테스트하려면 `.env`에 `APP_ENV=local`, `USE_SAMPLE_DATA=true`, `UPSTAGE_API_KEY=<키>`, `EMBEDDING_DIMENSIONS=1024`를 설정합니다. 질문과 샘플 문서가 Upstage로 전송되며 Solar Embedding 2 query/passage 모델을 각각 사용합니다. 기존 Titan 벡터와 혼합 검색하지 않도록 이 키는 실제 DB 모드에서 사용할 수 없습니다. 답변 생성에는 별도 LLM 설정이 필요합니다.
+
 `DOCUMENT_TOPICS_ENABLED=true`이면 적재할 때 문서마다 제목과 앞부분 2,000자를 `LLM_MODEL`로 보내 주제를 1~3개 만들고 PostgreSQL `document_topics`에 저장합니다(`docs199-Server` V15 필요). 기본은 꺼짐이고 꺼져 있으면 이 테이블을 건드리지 않습니다. Spring은 `GRAPH_TOPIC_EDGES_ENABLED=true`일 때 저장된 주제로 문서 간선을 계산합니다. `python -m app.retrieval.document_topics <JSON 파일>`은 저장 없이 주제와 간선을 출력합니다. `NEO4J_URI`를 넣으면 질문 검색에도 Neo4j를 씁니다. 검색된 상위 문서가 본문에서 가리키는 문서를 최대 2단계 따라가, 질문과 가까운 청크를 최대 2개 더합니다. `GRAPH_SEARCH_ENABLED=false`면 끕니다.
 
 검색은 PostgreSQL 벡터 검색과 전문 검색을 항상 함께 실행합니다. 두 결과의 상위 청크에서 문서 ID를 모아, 시작 문서도 PostgreSQL `accessible_chunks` 기반의 권한·현재 버전·문서 필터 검증을 통과한 경우에만 Neo4j 관계 탐색에 사용합니다. 이 하이브리드 시작점으로부터 문서의 명시적 `REFERENCES` 관계를 조회하고, 질문에 Entity가 직접 언급된 경우 기존 Entity 근거 청크 검색도 병행합니다. 그래프 후보는 PostgreSQL에서 다시 권한·현재 버전·필터를 검증하고 질문과 가까운 청크를 가져와 벡터·그래프·전문 검색 결과와 RRF로 결합합니다. 최종 상위 문서 3개에서 본문이 가리키는 문서를 최대 2단계 따라가고, 접근 가능한 관련 청크를 최대 2개 기존 결과 뒤에 더합니다. 따라서 현재 컨텍스트는 RRF 상위 5개에 연쇄 청크를 추가한 구성입니다.
 
 관계 그래프는 문서 제목(파일명 확장자를 제외한 표기도 포함)에 이름이 명시된 문서를 대상으로 `《문서명》` 또는 `[[문서명]]` 표기를 추출합니다. 이름이 중복되거나 대상이 없으면 관계를 만들지 않습니다. JSON 일괄 적재는 입력 문서와 기존 Neo4j 문서 제목 목록을 함께 사용하므로 일부 문서만 적재해도 이미 등록된 다른 파일의 대상을 찾습니다. 문서 전체와 권한은 Neo4j에 복사하지 않으며 엔티티 관계의 근거 인용만 저장합니다. 문서 주제는 `DOCUMENT_TOPICS_ENABLED=true`일 때 제목과 앞부분 2,000자에서 1~3개를 `LLM_MODEL`로 생성해 PostgreSQL `document_topics`에 저장합니다(`docs199-Server` V15 필요). Spring은 `GRAPH_TOPIC_EDGES_ENABLED=true`일 때 저장된 주제로 문서 간선을 계산합니다. `python -m app.retrieval.document_topics <JSON 파일>`은 저장 없이 주제와 간선을 출력합니다.
 
-질문 임베딩이 실패해도 전문 검색이 하이브리드 시작점을 제공하면 그래프 관계 경로를 계속 사용할 수 있습니다. 그래프 후보와 연쇄 청크는 PostgreSQL에서 cosine distance 상한(기본 0.85)을 적용해 가져오며, 연쇄 청크는 관련 순으로 최대 2개를 기존 결과 뒤에 추가합니다. 전문 검색은 `simple` 설정이라 "연차는"처럼 조사가 붙은 단어는 "연차"와 맞지 않을 수 있습니다.
+질문 임베딩이 실패해도 전문 검색이 하이브리드 시작점을 제공하면 그래프 관계 경로를 계속 사용할 수 있습니다. 그래프 후보는 PostgreSQL에서 cosine distance 상한(기본 0.85)을 적용해 가져옵니다. 연쇄 청크는 거리 상한 없이 가까운 순으로 최대 2개를 기존 결과 뒤에 추가합니다. 전문 검색은 `simple` 설정이라 "연차는"처럼 조사가 붙은 단어는 "연차"와 맞지 않을 수 있습니다.
 
 격리 PostgreSQL·Neo4j에서 앱 검색 API 전체 경로를 확인하려면 아래의 [격리 GraphDB 통합 테스트](#격리된-graphdb-통합-테스트)를 실행합니다. 기존 Desktop DB는 `Document.doc_id/title`, `Chunk.chunk_id` 구조인 반면 앱은 `Document.document_id/source`, `Chunk.id`, `REFERENCES` 관계를 기대하므로 그대로 연결해도 검색되지 않습니다. 또한 이 저장소의 PostgreSQL 접속 설정이 없으면 앱 검색은 503으로 종료됩니다. 팀 서버의 `NEO4J_URI`는 비워 두고, 실제 데이터 스키마와 PostgreSQL 권한 검증을 확인한 뒤에만 Neo4j를 켭니다.
 

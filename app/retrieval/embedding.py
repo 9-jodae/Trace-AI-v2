@@ -22,6 +22,32 @@ QUERY_CACHE_SIZE = 256
 _query_cache: OrderedDict[tuple[str | None, int, str], list[float]] = OrderedDict()
 
 
+class UpstageTestEmbedder:
+    """로컬 샘플 데이터에 사용하는 Upstage query/passage 임베딩."""
+
+    def __init__(self, api_key: str) -> None:
+        self._api_key = api_key
+
+    async def _embed(self, texts: list[str], role: str) -> list[list[float]]:
+        async with httpx.AsyncClient(timeout=BATCH_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                "https://api.upstage.ai/v1/embeddings",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                json={"model": f"solar-embedding-2-{role}", "input": texts},
+            )
+        response.raise_for_status()
+        data = sorted(response.json()["data"], key=lambda item: item["index"])
+        if len(data) != len(texts) or [item["index"] for item in data] != list(range(len(texts))):
+            raise AiUnavailableError("Upstage 임베딩 응답 개수 또는 순서가 올바르지 않습니다.")
+        return [item["embedding"] for item in data]
+
+    async def aembed_query(self, text: str) -> list[float]:
+        return (await self._embed([text], "query"))[0]
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        return await self._embed(texts, "passage")
+
+
 class ProxyEmbedder:
     """docs199-Server의 임시 임베딩 중계 API를 호출한다. 질문과 문서가 같은 Titan 설정을 쓴다."""
 
@@ -54,6 +80,10 @@ def _build_embedder(model: str, api_key: str | None, dimensions: int):
 
 
 def _embedder():
+    if config.upstage_test_api_key():
+        if not config.use_sample_data():
+            raise AiUnavailableError("UPSTAGE_API_KEY는 로컬 샘플 데이터 테스트에서만 사용할 수 있습니다.")
+        return UpstageTestEmbedder(config.upstage_test_api_key())
     proxy_url = config.embedding_proxy_url()
     if proxy_url:
         if not config.internal_secret():
@@ -76,7 +106,10 @@ def _check_dimensions(vectors: list[list[float]]) -> None:
 
 async def embed_query(text: str) -> list[float]:
     # 같은 질문의 임베딩 비용을 줄인다. 벡터에는 권한 정보가 없어 대화끼리 공유해도 된다
-    key = (config.embedding_proxy_url() or config.embedding_model(), config.embedding_dimensions(), text)
+    model = (
+        "upstage-test" if config.upstage_test_api_key() else config.embedding_proxy_url() or config.embedding_model()
+    )
+    key = (model, config.embedding_dimensions(), text)
     cached = _query_cache.get(key)
     if cached is not None:
         _query_cache.move_to_end(key)

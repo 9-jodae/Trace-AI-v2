@@ -95,7 +95,8 @@ def test_reference_traversal_is_one_hop_bounded_and_returns_no_content():
     assert "2.." not in query and "c.text" not in query and "quote" not in query
     assert "collect(id)[0..$per_document_limit]" in query
     assert "ORDER BY priority, document_id, chunk_index" in query
-    assert "0 AS priority" in query and "1 AS priority" in query and "2 AS priority" in query
+    assert "0 AS priority" in query and "1 AS priority" in query
+    assert "2 AS priority" not in query
 
 
 def test_replace_document_persists_only_identifiers_and_offsets():

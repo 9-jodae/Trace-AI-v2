@@ -231,6 +231,22 @@ def main() -> int:
         if indexed_chunks < 2:
             raise RuntimeError("가상 문서 색인이 완료되지 않았습니다.")
 
+        async def check_unlinked_document() -> None:
+            graph_store = Neo4jGraphStore.from_uri(NEO4J_URI, "neo4j", NEO4J_PASSWORD, "neo4j")
+            try:
+                async with graph_store._driver.session(database="neo4j") as session:
+                    await (await session.run(
+                        "CREATE (:Document {document_id: $id})-[:HAS_CHUNK]->(:Chunk {id: $chunk, chunk_index: 0})",
+                        id="unlinked-fixture", chunk="unlinked-fixture-chunk",
+                    )).consume()
+                candidates = await graph_store.search_from_documents(["unlinked-fixture"], 10)
+                if candidates:
+                    raise RuntimeError("참조 관계가 없는 문서의 청크가 그래프 후보로 반환되었습니다.")
+            finally:
+                await graph_store.close()
+
+        asyncio.run(check_unlinked_document())
+
         async def add_stale_graph_candidate() -> None:
             graph_store = Neo4jGraphStore.from_uri(
                 NEO4J_URI, "neo4j", NEO4J_PASSWORD, "neo4j"
@@ -242,7 +258,7 @@ def main() -> int:
                             """MATCH (d:Document {document_id: $document_id})
                                CREATE (c:Chunk {id: $chunk_id, chunk_index: 99})
                                CREATE (d)-[:HAS_CHUNK]->(c)""",
-                            document_id=document_id,
+                            document_id=related_document_id,
                             chunk_id=stale_chunk_id,
                         )
                     ).consume()
@@ -324,6 +340,14 @@ def main() -> int:
             "expectedDocumentIds": [related_document_id],
         }
         with TestClient(app_module.app) as client:
+            os.environ["GRAPH_SEARCH_ENABLED"] = "false"
+            baseline_response = client.post(
+                "/api/v1/agent/chat", json={**payload, "threadId": "baseline-without-graph"}
+            )
+            baseline_body = baseline_response.json()
+            os.environ["GRAPH_SEARCH_ENABLED"] = "true"
+            trace.clear()
+            trace.update(new_trace())
             no_embedding_response = client.post("/api/v1/agent/chat", json=payload)
             no_embedding_trace = json.loads(json.dumps(trace))
             no_embedding_body = no_embedding_response.json()
@@ -440,6 +464,22 @@ def main() -> int:
             "result": "PASS" if no_embedding_passed and hybrid_passed and extra_passed else "FAIL",
             "execution_path": "in-process FastAPI POST /api/v1/agent/chat, real isolated PostgreSQL and Neo4j",
             "question": QUESTION,
+            "same_question_comparison": {
+                "graph_disabled": {
+                    "http_status": baseline_response.status_code,
+                    "returned_expected_document": any(
+                        source.get("documentId") == related_document_id
+                        for source in baseline_body.get("sources", [])
+                    ),
+                },
+                "graph_enabled": {
+                    "http_status": no_embedding_response.status_code,
+                    "returned_expected_document": any(
+                        source.get("documentId") == related_document_id
+                        for source in no_embedding_body.get("sources", [])
+                    ),
+                },
+            },
             "access_scope": SCOPE,
             "filters": None,
             "graph_seed_strategy": (

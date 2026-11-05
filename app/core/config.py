@@ -116,6 +116,10 @@ def embedding_api_key() -> str | None:
     return os.getenv("EMBEDDING_API_KEY") or None
 
 
+def upstage_test_api_key() -> str | None:
+    return None if is_production() else os.getenv("UPSTAGE_API_KEY") or None
+
+
 def embedding_model() -> str | None:
     return os.getenv("EMBEDDING_MODEL") or None
 

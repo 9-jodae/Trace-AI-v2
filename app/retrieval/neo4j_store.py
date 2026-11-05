@@ -48,10 +48,6 @@ LIMIT $limit
 REFERENCE_SEARCH_CYPHER = """
 CALL () {
     UNWIND $documents AS document_id
-    MATCH (d:Document {document_id: document_id})-[:HAS_CHUNK]->(c:Chunk)
-    RETURN c.id AS id, d.document_id AS document_id, c.chunk_index AS chunk_index, 2 AS priority
-    UNION ALL
-    UNWIND $documents AS document_id
     MATCH (d:Document {document_id: document_id})-[r:REFERENCES]-(related:Document)
     MATCH (related)-[:HAS_CHUNK]->(c:Chunk)
     RETURN c.id AS id, related.document_id AS document_id, c.chunk_index AS chunk_index, 1 AS priority

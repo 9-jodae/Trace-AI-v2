@@ -19,6 +19,42 @@ class FakeEmbedder:
         return [[0.1] * self.size for _ in texts]
 
 
+def test_upstage_test_mode_uses_matching_query_and_passage_models(monkeypatch):
+    calls = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def post(self, url, headers, json):
+            calls.append((url, json["model"], json["input"]))
+            return httpx.Response(200, json={"data": [
+                {"index": index, "embedding": [0.1] * 1024} for index in range(len(json["input"]))
+            ]}, request=httpx.Request("POST", url))
+
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("USE_SAMPLE_DATA", "true")
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key")
+    monkeypatch.setattr(embedding.httpx, "AsyncClient", Client)
+    asyncio.run(embedding.embed_query("질문"))
+    asyncio.run(embedding.embed_documents(["문서"]))
+    assert [item[1] for item in calls] == ["solar-embedding-2-query", "solar-embedding-2-passage"]
+
+
+def test_upstage_test_key_refuses_real_database_mode(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setenv("USE_SAMPLE_DATA", "false")
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key")
+    with pytest.raises(AiUnavailableError, match="샘플 데이터"):
+        embedding._embedder()
+
+
 @pytest.fixture
 def init(monkeypatch):
     calls = []
