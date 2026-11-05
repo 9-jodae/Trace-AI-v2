@@ -9,7 +9,14 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
-from app.agent.evidence import EditProposal, Evidence, Keyword, parse_answer, parse_edit_proposals
+from app.agent.evidence import (
+    EditProposal,
+    Evidence,
+    Keyword,
+    describe_edits,
+    parse_answer,
+    parse_edit_proposals,
+)
 from app.core import config
 from app.core.errors import AiUnavailableError, describe_exception
 from app.core.schemas import AccessScope, SearchFilters
@@ -40,15 +47,60 @@ CONTEXT_REUSE_THRESHOLD = 0.7
 SMALL_TALK_THRESHOLD = 0.9
 # 잘못 판단해도 제안만 나가고 문서는 바뀌지 않는다. 일반 질문에 제안이 붙지 않게 높게 잡는다
 EDIT_REQUEST_THRESHOLD = 0.8
+# 응답 출처와 다음 턴에 남길 근거 수. 답변에 쓴 청크를 먼저 남긴다
+SOURCE_LIMIT = 5
 # "각 문서 간 충돌 찾아줘"처럼 주제 없이 문서 전체의 충돌을 묻는 말만 찾는다. 낱말이 모두 아래 일반 표현이어야 한다
 CONFLICT_WORD_PATTERN = re.compile(r"충돌|모순|불일치|상충|서로 다른 (값|내용)|다르게 (기재|적)|다른 말로")
 CONFLICT_SCAN_GENERIC_WORDS = (
-    "여기", "지금", "현재", "남은", "전체", "모든", "모두", "각", "어떤",
-    "어느", "문서", "간", "사이", "서로", "같은", "내용", "다른", "다르게",
-    "말로", "값", "기재", "적", "발생", "충돌", "모순", "불일치", "상충",
-    "문제", "경고", "리뷰", "있는지", "있어", "있나", "있는", "있을", "있습니까",
-    "찾아", "알려", "보여", "확인", "목록", "어디", "뭐", "무엇", "좀",
-    "해줘", "해", "줘", "게",
+    "여기",
+    "지금",
+    "현재",
+    "남은",
+    "전체",
+    "모든",
+    "모두",
+    "각",
+    "어떤",
+    "어느",
+    "문서",
+    "간",
+    "사이",
+    "서로",
+    "같은",
+    "내용",
+    "다른",
+    "다르게",
+    "말로",
+    "값",
+    "기재",
+    "적",
+    "발생",
+    "충돌",
+    "모순",
+    "불일치",
+    "상충",
+    "문제",
+    "경고",
+    "리뷰",
+    "있는지",
+    "있어",
+    "있나",
+    "있는",
+    "있을",
+    "있습니까",
+    "찾아",
+    "알려",
+    "보여",
+    "확인",
+    "목록",
+    "어디",
+    "뭐",
+    "무엇",
+    "좀",
+    "해줘",
+    "해",
+    "줘",
+    "게",
 )
 # 값을 직접 바꾸라는 말은 판단 모델이 놓쳐도 제안으로 보낸다. "수정 방법이 뭐야" 같은 질문은 걸리지 않는다
 EDIT_REQUEST_PATTERN = re.compile(
@@ -206,7 +258,7 @@ def _search_query(state: AgentState) -> str:
 
 
 async def retrieve(state: AgentState) -> dict:
-    update = await _search_documents(state)
+    update = await _with_previous_context(state, await _search_documents(state))
     known = state.get("known_conflicts")
     if not known or not _is_conflict_scan(state["messages"][-1].text):
         return update
@@ -215,6 +267,21 @@ async def retrieve(state: AgentState) -> dict:
     present = {chunk["id"] for chunk in found["chunks"]}
     others = [chunk for chunk in update["context"] if chunk["id"] not in present]
     return {**update, "context": [*found["chunks"], *others], "registered_conflicts": found["conflicts"]}
+
+
+async def _with_previous_context(state: AgentState, update: dict) -> dict:
+    """수정 요청은 직전 답변의 대상을 가리키므로, 직전 근거 중 아직 볼 수 있는 청크를 앞에 둔다."""
+    previous = state.get("context") or []
+    # 필터 밖 문서가 섞이지 않도록 필터가 있으면 새 검색 결과만 쓴다
+    if not state.get("edit_request") or not previous or state.get("filters") is not None:
+        return update
+    try:
+        kept = await filter_accessible_context(previous, state.get("access_scope"))
+    except Exception as exc:
+        logger.error("Context revalidation failed: %s", describe_exception(exc))
+        return update
+    present = {chunk["id"] for chunk in kept}
+    return {**update, "context": [*kept, *(chunk for chunk in update["context"] if chunk["id"] not in present)]}
 
 
 async def _search_documents(state: AgentState) -> dict:
@@ -286,15 +353,31 @@ async def _answer_with_documents(state: AgentState, context: list[Chunk], altern
     refused = answer == NO_EVIDENCE_ANSWER
     answer_type = "CLARIFICATION" if clarification else "NO_EVIDENCE" if refused else "ANSWER"
     refuse_or_ask = clarification or refused
+    edits = parse_edit_proposals(response, context) if edit_request and not refuse_or_ask else []
+    if edit_request and not refuse_or_ask:
+        # 원문과 맞춰 본 제안만 답변에 붙여, 화면에 카드가 없어도 바꿀 문장을 바로 볼 수 있게 한다
+        answer = f"{answer}\n\n{describe_edits(edits)}"
+        message = AIMessage(content=answer)
     # 쓰이지 않은 청크를 출처로 보여 주거나 다음 턴에 재사용하지 않는다
     return {
         "messages": [message],
         "evidence": evidence,
         "keywords": keywords,
-        "edit_proposals": parse_edit_proposals(response, context) if edit_request and not refuse_or_ask else [],
+        "edit_proposals": edits,
         "answer_type": answer_type,
-        "context": [] if clarification or refused else context,
+        "context": [] if refuse_or_ask else _cited_first(context, evidence, keywords, edits),
     }
+
+
+def _cited_first(
+    context: list[Chunk], evidence: list[Evidence], keywords: list[Keyword], edits: list[EditProposal]
+) -> list[Chunk]:
+    cited = {item["chunk_id"] for item in [*evidence, *keywords, *edits]}
+    ordered = [chunk for chunk in context if chunk["id"] in cited] + [
+        chunk for chunk in context if chunk["id"] not in cited
+    ]
+    # 근거 인용은 출처에 있어야 화면에서 이어지므로, 인용한 청크가 많으면 그만큼은 남긴다
+    return ordered[: max(SOURCE_LIMIT, len(cited & {chunk["id"] for chunk in context}))]
 
 
 async def generate(state: AgentState) -> dict:

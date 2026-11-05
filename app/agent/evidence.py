@@ -231,6 +231,22 @@ def ground_edits(raw: Any, context: list[Chunk]) -> list[EditProposal]:
     return edits[:MAX_EDITS]
 
 
+NO_GROUNDED_EDITS = (
+    "원문과 정확히 일치하는 문장을 찾지 못해 수정안을 만들지 못했습니다. 바꿀 문장이 있는 문서 이름을 함께 알려 주세요."
+)
+
+
+def describe_edits(edits: list[EditProposal]) -> str:
+    """답변 아래에 붙일 수정안. 문서는 바꾸지 않았다는 것을 함께 밝힌다."""
+    if not edits:
+        return NO_GROUNDED_EDITS
+    lines = [
+        f"- 「{edit['source'] or '출처 미상'}」\n  - 현재: {edit['before']}\n  - 수정안: {edit['after']}"
+        for edit in edits
+    ]
+    return "**수정 제안** (문서는 아직 바뀌지 않았습니다)\n" + "\n".join(lines)
+
+
 def parse_edit_proposals(response: str, context: list[Chunk]) -> list[EditProposal]:
     candidate = _load_candidate(response)
     return ground_edits(candidate.edits, context) if candidate else []
