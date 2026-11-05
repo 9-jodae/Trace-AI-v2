@@ -19,7 +19,7 @@
 
 샘플 데이터를 켜지 않으면 `DATABASE_URL`(pgvector)이 필요합니다. 없으면 검색 경로는 503을 반환하며, 샘플로 대체하지 않습니다. 그래프 검색은 선택이라 `NEO4J_URI`를 비우면 벡터 검색만 씁니다. `NEO4J_URI`를 넣으면 `NEO4J_PASSWORD`도 필요합니다. `ENTITY_EXTRACTION_ENABLED`는 기본 꺼짐입니다.
 
-`DOCUMENT_TOPICS_ENABLED=true`이면 적재할 때 문서마다 제목과 앞부분 2,000자를 `LLM_MODEL`로 보내 주제를 1~3개 만들고 PostgreSQL `document_topics`에 저장합니다(`docs199-Server` V15 필요). 기본은 꺼짐이고 꺼져 있으면 이 테이블을 건드리지 않습니다. Spring은 `GRAPH_TOPIC_EDGES_ENABLED=true`일 때 저장된 주제로 문서 간선을 계산합니다. `python -m app.retrieval.document_topics <JSON 파일>`은 저장 없이 주제와 간선을 출력합니다. `NEO4J_URI`를 넣으면 질문 검색에도 Neo4j를 씁니다. 검색된 상위 문서가 본문에서 가리키는 문서를 최대 2단계 따라가, 질문과 가까운 청크를 최대 2개 더합니다. `GRAPH_SEARCH_ENABLED=false`면 끕니다.
+`DOCUMENT_TOPICS_ENABLED=true`이면 적재할 때 문서마다 제목과 앞부분 2,000자를 `LLM_MODEL`로 보내 주제를 1~3개 만들고 PostgreSQL `document_topics`에 저장합니다(`Trace-Server` V15 필요). 기본은 꺼짐이고 꺼져 있으면 이 테이블을 건드리지 않습니다. Spring은 `GRAPH_TOPIC_EDGES_ENABLED=true`일 때 저장된 주제로 문서 간선을 계산합니다. `python -m app.retrieval.document_topics <JSON 파일>`은 저장 없이 주제와 간선을 출력합니다. `NEO4J_URI`를 넣으면 질문 검색에도 Neo4j를 씁니다. 검색된 상위 문서가 본문에서 가리키는 문서를 최대 2단계 따라가, 질문과 가까운 청크를 최대 2개 더합니다. `GRAPH_SEARCH_ENABLED=false`면 끕니다.
 
 Spring이 새 버전을 저장하면 `POST /ingest`로 다시 적재합니다. 202를 바로 돌려주고 뒤에서 원본 읽기, 본문 추출, 청킹, 임베딩, Neo4j 문서·참조 교체를 한 뒤 `SPRING_INTERNAL_URL`로 결과를 알립니다. 내용이 이전 버전과 같은 청크는 기존 임베딩을 재사용하고 바뀐 청크만 임베딩합니다. 구버전 작업은 건너뜁니다. 문서는 한 번에 하나씩 처리하며 Spring에서 `AI_INGEST_MODE=http`일 때만 호출됩니다. `DOCUMENT_TYPE_ENABLED=true`이면 적재가 끝난 뒤 제목과 앞부분 2,000자를 `LLM_MODEL`로 보내 유형(`HANDOVER`, `APPROVAL`, `REPORT`, `PRESENTATION`, `ETC`)을 정하고 결과 콜백의 `documentType`에 담습니다. 꺼져 있거나 분류하지 못하면 이 필드를 보내지 않고, Spring은 기존 유형을 유지합니다.
 
@@ -27,9 +27,9 @@ Spring이 새 버전을 저장하면 `POST /ingest`로 다시 적재합니다. 2
 
 벡터와 전문 검색이 모두 실패해 근거가 없으면 "찾지 못했습니다"로 답하지 않고 503을 돌려줍니다. 권한이나 DB 장애를 문서 없음으로 숨기지 않기 위해서입니다.
 
-"각 문서 간 충돌 찾아줘"처럼 주제 없이 충돌을 물으면 불일치를 밝히는 표현을 더해 새로 검색하고, 찾은 문서 쌍과 함께 검색에 걸린 범위만 봤다고 답합니다. 전체 문서를 비교하는 기능은 아닙니다(`docs199-Server#92`).
+"각 문서 간 충돌 찾아줘"처럼 주제 없이 충돌을 물으면 불일치를 밝히는 표현을 더해 새로 검색하고, 찾은 문서 쌍과 함께 검색에 걸린 범위만 봤다고 답합니다. 전체 문서를 비교하는 기능은 아닙니다(`Trace-Server#92`).
 
-Spring이 요청의 `knownConflicts`로 등록된 충돌을 보내면 충돌 탐색 질문에서만 사용합니다. 앞에서 5건까지 항목을 임베딩해(건마다 Titan 1회) 두 문서에서 가까운 청크를 2개씩 근거 앞에 넣습니다. Neo4j로 청크를 찾고 권한과 질문 필터는 PostgreSQL에서 다시 확인합니다. 한쪽 문서라도 청크를 찾지 못하면 그 충돌은 뺍니다. 값은 원문에서 찾게 하며, 찾지 못하면 등록돼 있지만 확인하지 못했다고 답합니다. 조회가 실패하면 일반 검색 결과로 답합니다. 질문 필터나 상한 때문에 빠진 등록 충돌이 있으면 그 건수를 답에 밝히고, 필터가 있으면 풀고 다시 물어보라고 안내합니다. 충돌 탐색 질문마다 받은 건수와 근거로 쓴 건수를 로그(`Known conflicts: received=... used=...`)에 남깁니다. 항목과 문서는 남기지 않습니다. 필드가 없으면 기존과 같습니다(`docs199-Server#101`).
+Spring이 요청의 `knownConflicts`로 등록된 충돌을 보내면 충돌 탐색 질문에서만 사용합니다. 앞에서 5건까지 항목을 임베딩해(건마다 Titan 1회) 두 문서에서 가까운 청크를 2개씩 근거 앞에 넣습니다. Neo4j로 청크를 찾고 권한과 질문 필터는 PostgreSQL에서 다시 확인합니다. 한쪽 문서라도 청크를 찾지 못하면 그 충돌은 뺍니다. 값은 원문에서 찾게 하며, 찾지 못하면 등록돼 있지만 확인하지 못했다고 답합니다. 조회가 실패하면 일반 검색 결과로 답합니다. 질문 필터나 상한 때문에 빠진 등록 충돌이 있으면 그 건수를 답에 밝히고, 필터가 있으면 풀고 다시 물어보라고 안내합니다. 충돌 탐색 질문마다 받은 건수와 근거로 쓴 건수를 로그(`Known conflicts: received=... used=...`)에 남깁니다. 항목과 문서는 남기지 않습니다. 필드가 없으면 기존과 같습니다(`Trace-Server#101`).
 
 응답 출처와 다음 턴에 남길 근거는 5개입니다. 답변 근거, 키워드, 수정 제안에 쓴 청크를 먼저 남기고, 찾지 못한 내용은 문서에 없다고 단정하지 않게 안내합니다. 답변 JSON이 깨지면 Sonnet을 한 번 더 호출하고, 또 깨지면 오류로 끝납니다. 전체 문서 수나 목록을 직접 물으면 검색 결과 수로 답하지 않도록 프롬프트로 안내하고, 다른 질문의 답변에는 전체 수나 검색 범위를 언급하지 않게 합니다. 프롬프트 규칙이라 항상 지켜지는 것은 아닙니다.
 
@@ -39,9 +39,9 @@ Spring이 요청의 `knownConflicts`로 등록된 충돌을 보내면 충돌 탐
 
 벡터 검색은 pgvector cosine distance가 `VECTOR_MAX_COSINE_DISTANCE` 이하인 청크만 반환합니다. 기본값은 `0.85`입니다. 시연 문서 18개에 Titan v2로 질문 15개를 측정해 정했습니다. 관련 질문 9개의 정답 문서는 거리 0.435~0.821이었고, 무관 질문 6개의 1위는 0.827~0.950이었습니다. 표본이 작아 문서가 늘면 다시 재야 합니다. 맞는 문서를 놓치는 쪽이 더 나쁘다고 보아 여유를 두었고, 기준을 통과한 무관 질문은 답변 단계에서 거절합니다. 값은 0~2 범위여야 하고, 잘못된 값이면 서버가 시작되지 않습니다.
 
-응답의 `answerType`은 `ANSWER`, `NO_EVIDENCE`, `CLARIFICATION`, `SMALL_TALK` 중 하나입니다. 이름과 값은 임시입니다(`docs199-Server#76`).
+응답의 `answerType`은 `ANSWER`, `NO_EVIDENCE`, `CLARIFICATION`, `SMALL_TALK` 중 하나입니다. 이름과 값은 임시입니다(`Trace-Server#76`).
 
-답변에는 핵심 문장 `evidence`와 핵심 키워드 `keywords`(`{chunkId, text}`)가 각각 최대 3개 붙습니다. 키워드도 원문에 그대로 있는 문구만 내보내고, 되묻기, 일상 대화, 거절에서는 빈 배열입니다. 형식은 `docs199-Server#78`을 따릅니다.
+답변에는 핵심 문장 `evidence`와 핵심 키워드 `keywords`(`{chunkId, text}`)가 각각 최대 3개 붙습니다. 키워드도 원문에 그대로 있는 문구만 내보내고, 되묻기, 일상 대화, 거절에서는 빈 배열입니다. 형식은 `Trace-Server#78`을 따릅니다.
 
 검색 결과가 없거나 찾은 문서로 답하지 못하면, 응대 모델이 "리브 팔러시"를 "leave policy"로 바꾸듯 다른 표기를 만들어 한 번 더 검색합니다. 다른 표기가 없으면 다시 검색하지 않습니다. 요청마다 JEV가 먼저 회사나 문서와 무관한 말인지 판단합니다. 확률이 0.9 이상이면 검색 없이 `CHAT_LLM_MODEL`이 답합니다. 판단에 실패하면 검색으로 진행합니다. 검색 결과가 없을 때도 같은 모델을 호출합니다. 인사, 메뉴 추천, 일반 상식, 도우미 기능 질문에는 답하고, 불분명한 문서 질문에는 되묻고, 회사 규정이나 사내 정보를 묻는 질문에는 고정 거절 문장을 씁니다. 이 되묻기도 앞의 되묻기와 같이 표시되어, 다음 말은 직전 질문을 붙여 검색하고 일상 대화 판단을 건너뛰며 연달아 되묻지 않습니다. 이 호출에는 대화 기록을 넘기지 않고, 응대 모델이 실패하면 `LLM_MODEL`로 넘어가며, 그것도 실패하면 거절 문장으로 답합니다.
 
@@ -63,9 +63,9 @@ JSON 문서는 `python -m app.retrieval.indexing <파일>`로 적재합니다. �
 
 ## 운영 DB 연결
 
-운영 PostgreSQL과 Neo4j는 SSH 터널로 접속합니다. 터널 명령과 계정은 `docs199-Server` 저장소의 `docs/ai-integration-setup.md`를 따르고, 비밀번호는 팀장에게 받습니다.
+운영 PostgreSQL과 Neo4j는 SSH 터널로 접속합니다. 터널 명령과 계정은 `Trace-Server` 저장소의 `docs/ai-integration-setup.md`를 따르고, 비밀번호는 팀장에게 받습니다.
 
-`DATABASE_URL`은 `postgresql://ai_app:비밀번호@localhost:5432/docs199` 형식으로 적습니다. PostgreSQL 연결은 풀로 재사용하며 최대 크기는 `DB_POOL_MAX_SIZE`(기본 10)입니다. `ai_app`은 `chunks`만 읽고 쓸 수 있고 나머지 허용 테이블은 읽기 전용이며, DDL을 실행할 수 없습니다. `chunks`는 1024차원이므로 `EMBEDDING_DIMENSIONS=1024`가 아니면 운영 저장소를 쓰지 않습니다. 스키마는 `docs199-Server`의 Flyway(V11, V12)가 관리합니다.
+`DATABASE_URL`은 `postgresql://ai_app:비밀번호@localhost:5432/docs199` 형식으로 적습니다. PostgreSQL 연결은 풀로 재사용하며 최대 크기는 `DB_POOL_MAX_SIZE`(기본 10)입니다. `ai_app`은 `chunks`만 읽고 쓸 수 있고 나머지 허용 테이블은 읽기 전용이며, DDL을 실행할 수 없습니다. `chunks`는 1024차원이므로 `EMBEDDING_DIMENSIONS=1024`가 아니면 운영 저장소를 쓰지 않습니다. 스키마는 `Trace-Server`의 Flyway(V11, V12)가 관리합니다.
 
 ## 테스트
 

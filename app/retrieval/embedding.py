@@ -23,7 +23,7 @@ _query_cache: OrderedDict[tuple[str | None, int, str], list[float]] = OrderedDic
 
 
 class ProxyEmbedder:
-    """docs199-Server의 임시 임베딩 중계 API를 호출한다. 질문과 문서가 같은 Titan 설정을 쓴다."""
+    """Trace-Server의 임시 임베딩 중계 API를 호출한다. 질문과 문서가 같은 Titan 설정을 쓴다."""
 
     def __init__(self, url: str, secret: str) -> None:
         self._url = url

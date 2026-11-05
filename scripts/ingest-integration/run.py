@@ -21,10 +21,10 @@ import psycopg
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
-PROJECT = "docs199-ingest-integration"
+PROJECT = "trace-ingest-integration"
 PASSWORD = "ingest_test_only_password"
-OWNER_URL = f"postgresql://ingest_test:{PASSWORD}@127.0.0.1:15433/docs199_ingest_test"
-AI_URL = f"postgresql://ai_app:{PASSWORD}@127.0.0.1:15433/docs199_ingest_test"
+OWNER_URL = f"postgresql://ingest_test:{PASSWORD}@127.0.0.1:15433/trace_ingest_test"
+AI_URL = f"postgresql://ai_app:{PASSWORD}@127.0.0.1:15433/trace_ingest_test"
 NEO4J_URI = "bolt://127.0.0.1:17688"
 MINIO_URL = "http://127.0.0.1:19000"
 BUCKET = "documents"

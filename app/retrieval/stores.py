@@ -13,9 +13,9 @@ from app.retrieval.embedding import embed_documents
 from app.retrieval.schemas import Chunk
 
 MAX_FULLTEXT_TERMS = 12
-# chunks.embedding 컬럼의 차원 (docs199-Server V11)
+# chunks.embedding 컬럼의 차원 (Trace-Server V11)
 CHUNK_EMBEDDING_DIMENSIONS = 1024
-# 권한과 필터 판단은 서버 함수에 맡긴다. 삭제된 문서와 이전 버전도 함수가 제외한다 (docs199-Server V12, V13)
+# 권한과 필터 판단은 서버 함수에 맡긴다. 삭제된 문서와 이전 버전도 함수가 제외한다 (Trace-Server V12, V13)
 VECTOR_SEARCH_SQL = """
 SELECT c.id::text AS id, c.content AS text, d.title AS source, dv.document_id::text AS document_id,
        c.document_version_id::text AS version_id, c.char_start, c.char_end
@@ -106,7 +106,7 @@ JOIN documents d ON d.id = dv.document_id
 WHERE dv.id = %s::uuid AND dv.version_number = d.current_version AND d.deleted_at IS NULL
 """
 DELETE_VERSION_SQL = "DELETE FROM chunks WHERE document_version_id = %s"
-# ai_app은 테이블을 직접 읽거나 쓰지 못하고 이 함수만 실행한다 (docs199-Server V15)
+# ai_app은 테이블을 직접 읽거나 쓰지 못하고 이 함수만 실행한다 (Trace-Server V15)
 CURRENT_VERSION_DOCUMENT_SQL = """
 SELECT d.id::text AS document_id, d.title
 FROM document_versions dv
@@ -212,7 +212,7 @@ def _to_vector(embedding: list[float]) -> str:
 
 
 def _filter_params(filters: SearchFilters | None) -> tuple:
-    # 필터를 끄려면 서버 함수에 명시적으로 NULL을 넘긴다 (docs199-Server ai-server-contract)
+    # 필터를 끄려면 서버 함수에 명시적으로 NULL을 넘긴다 (Trace-Server ai-server-contract)
     if filters is None:
         return (None, None, None, None, None)
     return (

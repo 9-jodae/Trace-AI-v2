@@ -4,8 +4,8 @@ This is the single source of repository rules. Keep AI harness files (`AGENTS.md
 
 ## Structure and ownership
 
-- This is the Python AI server for docs199. Put shared code in `app/core` and feature code in `app/<feature>`. Follow `docs/ai/rules/python-fastapi.md`.
-- Spring in `9-jodae/docs199-Server` owns authentication, authorization, document management, and logs. Record the agreed server contract only in that repository's `docs/ai-server-contract.md`.
+- This is the Python AI server for Trace. Put shared code in `app/core` and feature code in `app/<feature>`. Follow `docs/ai/rules/python-fastapi.md`.
+- Spring in `9-jodae/Trace-Server` owns authentication, authorization, document management, and logs. Record the agreed server contract only in that repository's `docs/ai-server-contract.md`.
 - That repository's Flyway migrations are the only way to change the shared database schema. This server must not change the schema.
 
 ## Safety and verification

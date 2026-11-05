@@ -6,7 +6,7 @@ Issue #52 구현 브랜치 기준. 이 문서는 코드에 반영된 형식과 �
 
 Entity 유형은 `PROJECT`, `PROCESS`, `SYSTEM_SERVICE`, `ORG_UNIT`, `POLICY`, `CONCEPT`다. 사람은 제외한다. 이름 정규화는 검색 표기를 비교할 때 쓰며, Entity ID는 문서 이름 대신 namespace, 유형, 정규화 정식 이름으로 결정한다. 현재 namespace는 단일 서비스 값 `docs199`다. 여러 조직의 문서를 하나의 DB에서 분리해 색인할 때는 이를 백엔드의 실제 tenant/collection 식별자에 연결해야 한다.
 
-`MENTIONS`는 실제 청크 표면형, 표면형 위치, 이를 포함한 원문 인용 위치를 보존한다. `ENTITY_EXTRACTION_ENABLED=true`일 때만 각 문서의 각 청크를 설정된 LLM에 보내 후보를 추출한다. 기본은 꺼져 있으며, 켜기 전에 외부 전송 범위(`docs199-Server#14`)를 정해야 한다. 인용과 표면형이 원문에 정확히 존재하고 위치가 청크 범위에 포함될 때만 저장한다. 짧은 인용에 이름이 여러 번 나오면 각 이름 위치를 별도 mention으로 저장한다.
+`MENTIONS`는 실제 청크 표면형, 표면형 위치, 이를 포함한 원문 인용 위치를 보존한다. `ENTITY_EXTRACTION_ENABLED=true`일 때만 각 문서의 각 청크를 설정된 LLM에 보내 후보를 추출한다. 기본은 꺼져 있으며, 켜기 전에 외부 전송 범위(`Trace-Server#14`)를 정해야 한다. 인용과 표면형이 원문에 정확히 존재하고 위치가 청크 범위에 포함될 때만 저장한다. 짧은 인용에 이름이 여러 번 나오면 각 이름 위치를 별도 mention으로 저장한다.
 
 ## Relation
 
