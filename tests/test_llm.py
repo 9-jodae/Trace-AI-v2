@@ -273,3 +273,37 @@ class TestClientReuse:
         run()
         assert calls == ["fake:fake-llm", "fake:backup"]
 
+
+class TestReplyWithoutDocuments:
+    @pytest.fixture
+    def models(self, monkeypatch):
+        calls = []
+        replies = []
+
+        async def invoke(model_name, messages):
+            calls.append((model_name, messages))
+            reply = replies.pop(0)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+        monkeypatch.setattr(llm, "_invoke", invoke)
+        monkeypatch.setenv("CHAT_LLM_MODEL", "fake:chat")
+        return calls, replies
+
+    def test_uses_chat_model_without_history(self, models):
+        calls, replies = models
+        replies.append(" 안녕하세요! ")
+        assert asyncio.run(llm.generate_reply_without_documents("안녕?")) == "안녕하세요!"
+        assert calls[0][0] == "fake:chat" and len(calls[0][1]) == 2 and calls[0][1][-1].content == "안녕?"
+
+    def test_falls_back_to_answer_model(self, models):
+        calls, replies = models
+        replies.extend([RuntimeError("권한 없음"), "안녕하세요!"])
+        assert asyncio.run(llm.generate_reply_without_documents("안녕?")) == "안녕하세요!"
+        assert [call[0] for call in calls] == ["fake:chat", "fake:fake-llm"]
+
+    def test_refusal_is_normalized(self, models):
+        _, replies = models
+        replies.append(f"죄송합니다. {llm.NO_EVIDENCE_ANSWER} 인사팀에 문의하세요.")
+        assert asyncio.run(llm.generate_reply_without_documents("점심 추천")) == llm.NO_EVIDENCE_ANSWER

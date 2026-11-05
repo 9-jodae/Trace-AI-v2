@@ -10,10 +10,16 @@ from typing_extensions import TypedDict
 
 from app.agent.evidence import Evidence, parse_answer
 from app.core import config
-from app.core.errors import describe_exception
+from app.core.errors import AiUnavailableError, describe_exception
 from app.core.schemas import AccessScope, SearchFilters
-from app.jev.client import can_answer_probability
-from app.llm.client import CLARIFICATION_KEY, NO_EVIDENCE_ANSWER, generate_answer, is_clarification
+from app.jev.client import can_answer_probability, small_talk_probability
+from app.llm.client import (
+    CLARIFICATION_KEY,
+    NO_EVIDENCE_ANSWER,
+    generate_answer,
+    generate_reply_without_documents,
+    is_clarification,
+)
 from app.retrieval.schemas import Chunk
 from app.retrieval.service import filter_accessible_context, search
 
@@ -21,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 # 잘못 재사용하면 틀린 답이 나가므로 애매하면 검색하도록 높게 잡는다
 CONTEXT_REUSE_THRESHOLD = 0.7
+# 문서 질문이 잘못 넘어가면 근거 없이 거절되므로 높게 잡는다
+SMALL_TALK_THRESHOLD = 0.9
 HISTORY_LIMIT = 6
 # 질문만으로는 검색어가 부족한 후속 질문. "그룹"처럼 단어의 일부인 경우는 제외한다
 FOLLOW_UP_PATTERN = re.compile(r"^(그럼|그러면|그건|그게|그거|그것|그 |이건|이게|이거|이 경우|앞서|위 )")
@@ -28,6 +36,7 @@ FOLLOW_UP_PATTERN = re.compile(r"^(그럼|그러면|그건|그게|그거|그것|
 
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
+    small_talk: bool
     context: list[Chunk]
     filters: SearchFilters | None
     access_scope: AccessScope | None
@@ -40,6 +49,35 @@ class AgentState(TypedDict):
 
 def _history(state: AgentState) -> list[AnyMessage]:
     return state["messages"][:-1][-HISTORY_LIMIT:]
+
+
+async def judge_small_talk(state: AgentState) -> dict:
+    if not config.jev_api_key():
+        return {"small_talk": False}
+    try:
+        probability = await small_talk_probability(state["messages"][-1].text)
+    except Exception as exc:
+        # 판단하지 못하면 문서 검색으로 진행한다
+        logger.error("Small talk judge failed: %s", describe_exception(exc))
+        return {"small_talk": False}
+    return {"small_talk": probability >= SMALL_TALK_THRESHOLD}
+
+
+def select_small_talk(state: AgentState) -> str:
+    return "small_talk" if state["small_talk"] else "judge_context"
+
+
+async def small_talk(state: AgentState) -> dict:
+    # 쓰이지 않은 청크를 출처로 보여 주지 않는다. route 값은 서버 계약이 정해질 때까지 늘리지 않는다
+    return {
+        "messages": [AIMessage(content=await _reply_without_documents(state))],
+        "evidence": [],
+        "context": [],
+        "route": "SEARCH",
+        "context_probability": None,
+        "failed_sources": [],
+        "fallback_reason": None,
+    }
 
 
 async def judge_context(state: AgentState) -> dict:
@@ -96,9 +134,18 @@ async def retrieve(state: AgentState) -> dict:
     return {"context": result["chunks"], "failed_sources": result["failed_sources"]}
 
 
+async def _reply_without_documents(state: AgentState) -> str:
+    try:
+        return await generate_reply_without_documents(state["messages"][-1].text)
+    except AiUnavailableError as exc:
+        # 문서가 없는 응대가 실패했다고 오류로 끝내지 않고 이전처럼 거절 문장으로 답한다
+        logger.warning("Reply without documents failed: %s", exc)
+        return NO_EVIDENCE_ANSWER
+
+
 async def generate(state: AgentState) -> dict:
     if not state["context"]:
-        return {"messages": [AIMessage(content=NO_EVIDENCE_ANSWER)], "evidence": []}
+        return {"messages": [AIMessage(content=await _reply_without_documents(state))], "evidence": []}
     response = await generate_answer(state["messages"][-1].text, state["context"], _history(state))
     answer, evidence, clarification = parse_answer(response, state["context"])
     # 두 번 연달아 되묻지 않는다. 모델이 어기면 일반 답변으로 내보낸다
@@ -126,10 +173,14 @@ def _timed(name: str, step: Callable[[AgentState], Awaitable[dict]]) -> Callable
 
 def build_agent():
     graph = StateGraph(AgentState)
+    graph.add_node("judge_small_talk", _timed("judge_small_talk", lambda state: judge_small_talk(state)))
+    graph.add_node("small_talk", _timed("small_talk", lambda state: small_talk(state)))
     graph.add_node("judge_context", _timed("judge_context", lambda state: judge_context(state)))
     graph.add_node("retrieve", _timed("retrieve", lambda state: retrieve(state)))
     graph.add_node("generate", _timed("generate", lambda state: generate(state)))
-    graph.add_edge(START, "judge_context")
+    graph.add_edge(START, "judge_small_talk")
+    graph.add_conditional_edges("judge_small_talk", select_small_talk, ["small_talk", "judge_context"])
+    graph.add_edge("small_talk", END)
     graph.add_conditional_edges("judge_context", select_route, ["generate", "retrieve"])
     graph.add_edge("retrieve", "generate")
     graph.add_edge("generate", END)

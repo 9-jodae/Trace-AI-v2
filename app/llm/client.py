@@ -42,7 +42,8 @@ SYSTEM_PROMPT = f"""사내 문서 검색 결과를 바탕으로 질문에 답한
   - 컨텍스트에 질문에 해당하는 서로 다른 대상이 2개 이상 있다.
   - 대상에 따라 답이 달라지고, 질문과 이전 대화로 어느 쪽인지 좁힐 수 없다.
   - 컨텍스트의 내용으로 선택지를 2~3개 제시할 수 있다.
-- 되물을 때는 answer에 선택지를 넣은 질문 한 문장을 쓴다.
+- 되물을 때는 answer를 "A에 관한 질문인가요, B에 관한 질문인가요? 좀 더 자세히 말씀해 주세요."처럼 쓴다.
+  선택지를 넣어 되묻고, 이어서 자세히 말해 달라고 요청한다.
   options에 선택지와 그 대상이 있는 컨텍스트 항목 번호를 담고, evidence는 빈 배열로 둔다.
 - 되묻지 않을 때는 options를 빈 배열로 둔다.
 - 다음 경우에는 되묻지 않는다.
@@ -57,6 +58,13 @@ SYSTEM_PROMPT = f"""사내 문서 검색 결과를 바탕으로 질문에 답한
 {{"answer": "답변",
  "evidence": [{{"chunk": 1, "quote": "원문 그대로의 문구"}}],
  "options": [{{"label": "선택지", "chunk": 1}}]}}"""
+# 검색 결과가 없을 때 쓴다. 문서가 없으므로 사실을 답하지 못하게 응대할 수 있는 말을 좁게 정한다
+NO_DOCUMENT_PROMPT = f"""사내 문서 도우미로 대화한다. 지금은 관련 문서를 찾지 못한 상태다.
+- 인사, 감사, 안부, 도우미 소개 요청에는 한국어로 1~2문장으로 자연스럽게 답한다.
+- 사내 문서에 관한 질문 같지만 무엇을 묻는지 불분명하면
+  "어떤 기간에 관한 질문인가요? 좀 더 자세히 말씀해 주세요."처럼 되묻고 자세히 말해 달라고 요청한다.
+- 그 밖의 모든 질문에는 정확히 '{NO_EVIDENCE_ANSWER}' 한 문장만 쓴다.
+- 회사 정책, 수치, 담당 부서, 절차를 말하거나 추측하지 않는다."""
 CLARIFICATION_KEY = "clarification"
 NO_REPEAT_CLARIFICATION = "직전에 이미 되물었으므로 이번에는 되묻지 말고 답하거나 거절 문장을 쓴다."
 
@@ -79,7 +87,7 @@ def build_prompt(question: str, context: list[Chunk], allow_clarification: bool 
     return prompt if allow_clarification else f"{prompt}\n\n{NO_REPEAT_CLARIFICATION}"
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=3)
 def _build_model(model_name: str, api_key: str | None):
     # Bedrock은 API 키 대신 실행 환경의 AWS 자격 증명을 쓴다
     credentials = config.bedrock_options() if config.uses_aws_credentials(model_name) else {"api_key": api_key}
@@ -103,17 +111,28 @@ async def generate_answer(question: str, context: list[Chunk], history: list[Bas
     return await generate_structured_response(messages)
 
 
-async def generate_structured_response(messages: list[BaseMessage]) -> str:
+async def generate_reply_without_documents(question: str) -> str:
+    # 이전 대화의 문서 내용을 다시 쓰지 않도록 대화 기록을 넘기지 않는다
+    messages = [SystemMessage(content=NO_DOCUMENT_PROMPT), HumanMessage(content=question)]
+    # 응대 모델을 쓰지 못해도 답변 모델로 응대한다
+    reply = await generate_structured_response(messages, config.chat_llm_model(), config.llm_model())
+    reply = reply.strip()
+    return NO_EVIDENCE_ANSWER if NO_EVIDENCE_ANSWER in reply else reply
+
+
+async def generate_structured_response(
+    messages: list[BaseMessage], model_name: str | None = None, fallback: str | None = None
+) -> str:
     """같은 모델·재시도·오류 처리를 쓴다. 출력 형식은 호출자가 검증한다."""
-    model_name = config.llm_model()
+    model_name = model_name or config.llm_model()
     if not model_name:
         raise AiUnavailableError("LLM_MODEL이 설정되지 않았습니다.")
     if not config.uses_aws_credentials(model_name) and not config.llm_api_key():
         raise AiUnavailableError("LLM_API_KEY가 설정되지 않았습니다.")
 
-    fallback = config.llm_fallback_model()
+    fallback = fallback or config.llm_fallback_model()
     failure: Exception | None = None
-    for candidate in (model_name, fallback) if fallback else (model_name,):
+    for candidate in (model_name, fallback) if fallback and fallback != model_name else (model_name,):
         try:
             return await _invoke(candidate, messages)
         except Exception as exc:

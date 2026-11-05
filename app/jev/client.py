@@ -13,6 +13,9 @@ CAN_ANSWER = Noul(
     instructions="이전 대화와 검색 컨텍스트에 적힌 내용만으로 사용자 질문에 정확히 답할 수 있다",
 )
 
+SMALL_TALK = Noul(
+    instructions="사용자의 말이 문서 내용을 묻지 않는 인사, 감사, 안부, 도우미 소개 요청 같은 일상 대화다",
+)
 
 _client: AsyncTypeSafeClient | None = None
 _client_settings: tuple[str | None, str] | None = None
@@ -58,3 +61,12 @@ async def can_answer_probability(question: str, context: list[Chunk], history: l
         questions={"can_answer": CAN_ANSWER},
     )
     return response.nouls["can_answer"].noul
+
+
+async def small_talk_probability(question: str) -> float:
+    client = await _get_client()
+    response = await client.system_one(
+        state=f"[사용자 질문]\n{_neutralize_markers(question)}",
+        questions={"small_talk": SMALL_TALK},
+    )
+    return response.nouls["small_talk"].noul

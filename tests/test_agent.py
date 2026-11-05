@@ -106,10 +106,18 @@ class TestSearchFailures:
 
 
 class TestNoResults:
-    def test_fixed_answer_without_llm(self, ask, ai):
+    def test_replies_without_documents(self, ask, ai):
         ai.search_result = {"chunks": [], "failed_sources": []}
-        body = ask("q").json()
-        assert body["answer"] == graph.NO_EVIDENCE_ANSWER and body["sources"] == [] and ai.llm_calls == []
+        ai.reply = "어떤 기간에 관한 질문인가요? 좀 더 자세히 말씀해 주세요."
+        body = ask("기간이 얼마나 됨?").json()
+        assert body["answer"] == ai.reply and body["sources"] == [] and body["evidence"] == []
+        assert ai.llm_calls == [] and ai.reply_calls == ["기간이 얼마나 됨?"]
+
+    def test_reply_failure_falls_back_to_fixed_answer(self, ask, ai):
+        ai.search_result = {"chunks": [], "failed_sources": []}
+        ai.reply = AiUnavailableError("LLM 호출 실패")
+        response = ask("q")
+        assert response.status_code == 200 and response.json()["answer"] == graph.NO_EVIDENCE_ANSWER
 
     def test_next_question_skips_jev(self, ask, ai):
         ai.search_result = {"chunks": [], "failed_sources": []}
@@ -154,3 +162,34 @@ class TestHistoryAndThreads:
         edges = {(edge.source, edge.target) for edge in graph.build_agent().get_graph().edges}
         assert ("judge_context", "generate") in edges and ("judge_context", "retrieve") in edges
         assert ("retrieve", "generate") in edges and ("generate", "__end__") in edges
+
+
+class TestSmallTalk:
+    def test_high_probability_skips_search_and_answer_model(self, ask, ai):
+        ai.small_talk = 0.9
+        ai.reply = "안녕하세요!"
+        body = ask("안녕?").json()
+        assert body["answer"] == "안녕하세요!" and body["sources"] == [] and body["evidence"] == []
+        assert ai.search_calls == [] and ai.llm_calls == [] and ai.jev_calls == []
+
+    def test_below_threshold_searches(self, ask, ai):
+        ai.small_talk = 0.89
+        body = ask("q").json()
+        assert body["answer"] == "답변: q" and ai.reply_calls == [] and len(ai.search_calls) == 1
+
+    def test_judge_failure_searches(self, ask, ai):
+        ai.small_talk = RuntimeError("JEV down")
+        assert ask("q").json()["answer"] == "답변: q" and ai.reply_calls == []
+
+    def test_no_jev_key_searches_without_judging(self, ask, ai, monkeypatch):
+        monkeypatch.setenv("JEV_API_KEY", "")
+        assert ask("q").status_code == 200 and ai.small_talk_calls == [] and len(ai.search_calls) == 1
+
+    def test_small_talk_clears_previous_sources(self, ask, ai):
+        ask("q1")
+        ai.small_talk = 0.95
+        assert ask("고마워").json()["sources"] == []
+        ai.small_talk = 0.0
+        ai.jev_calls.clear()
+        ask("q2")
+        assert ai.jev_calls == [] and len(ai.search_calls) == 2

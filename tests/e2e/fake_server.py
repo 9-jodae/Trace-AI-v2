@@ -43,6 +43,16 @@ async def generate(question, context, history):
     return f"<img src=x onerror=\"document.body.dataset.xss='1'\"> 가짜 답변: {question}"
 
 
+async def small_talk_probability(question):
+    return 0.0
+
+
+async def generate_reply(question):
+    return graph.NO_EVIDENCE_ANSWER
+
+
+graph.small_talk_probability = small_talk_probability
+graph.generate_reply_without_documents = generate_reply
 graph.can_answer_probability = can_answer
 graph.search = search
 graph.filter_accessible_context = filter_context

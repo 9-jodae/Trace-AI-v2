@@ -334,3 +334,4 @@ class TestClarification:
         ai.search_result = {"chunks": [], "failed_sources": []}
         body = client.post(URL, json={"message": "한도가 얼마야?"}).json()
         assert body["answer"] == graph.NO_EVIDENCE_ANSWER and ai.llm_calls == []
+        assert ai.reply_calls == ["한도가 얼마야?"]

@@ -45,15 +45,17 @@ class FakeJevClient:
         pass
 
     async def system_one(self, state, questions):
-        FakeJevClient.counter["jev"] += 1
-        FakeJevClient.counter["state"] = state
-        probability = FakeJevClient.probability
+        small_talk = "small_talk" in questions
+        if not small_talk:
+            FakeJevClient.counter["jev"] += 1
+            FakeJevClient.counter["state"] = state
+        probability = 0.0 if small_talk else FakeJevClient.probability
 
         class Noul:
             noul = probability
 
         class Response:
-            nouls = {"can_answer": Noul}
+            nouls = {"small_talk" if small_talk else "can_answer": Noul}
 
         return Response
 
@@ -118,7 +120,9 @@ def test_missing_embedding_uses_graph_only(client, counter, monkeypatch):
 def test_missing_embedding_and_no_graph_match_answers_no_result(client, counter, monkeypatch):
     monkeypatch.setenv("EMBEDDING_API_KEY", "")
     body = post(client, "관계없는 질문").json()
-    assert body["sources"] == [] and body["failedSources"] == ["vector"] and counter["llm"] == 0
+    # 문서가 없어도 응대 모델을 한 번 호출하고, 문서 내용은 넘기지 않는다
+    assert body["sources"] == [] and body["failedSources"] == ["vector"] and counter["llm"] == 1
+    assert counter["prompt"] == "관계없는 질문"
 
 
 def test_invalid_dimensions_only_disable_vector_search(client, counter, monkeypatch):
