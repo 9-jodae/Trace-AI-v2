@@ -43,6 +43,16 @@
 
 질문 요청의 `filters`는 서버의 9인자 `accessible_chunks`로 벡터 검색과 그래프 결과에 적용합니다. 필터가 있는 요청은 이전 근거를 재사용하지 않고 새로 검색합니다. 샘플 데이터에는 필터가 적용되지 않습니다.
 
+검색 단계별 순위와 그래프 연쇄를 확인하려면 `/api/v1/agent/chat` 요청에 `"traceRetrieval": true`를 추가합니다. 응답의 `retrievalTrace`에는 검색 query, 벡터·전문·그래프 단계별 청크 순위, RRF 순위·점수·검색기별 순위, 그래프 seed와 권한 검증을 통과한 연쇄 문서/청크, 최종 출처 순위와 단계별 시간이 포함됩니다. 대화 컨텍스트를 재사용해 검색하지 않은 경우에는 `status: retrievalSkipped`로 표시됩니다. 문서 본문은 trace에 복제하지 않습니다. PostgreSQL에서 권한·현재 버전·요청 필터 검증을 통과해 가져온 청크만 trace에 나타납니다. Trace는 해당 요청 응답으로만 반환하며 서버 로그나 저장소에 남기지 않습니다.
+
+```bash
+curl -s http://localhost:8000/api/v1/agent/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"출장 영수증을 낸 다음 결재는 어떻게 진행돼?","traceRetrieval":true,"expectedDocumentIds":["travel-policy","expense-approval"],"accessScope":{"departmentId":"11111111-1111-4111-8111-111111111111","position":"STAFF","clearance":"INTERNAL","isAdmin":true}}'
+```
+
+`retrievalTrace.graph.neo4jCandidateOrder`는 PostgreSQL에서 권한·현재 버전·필터 검증을 통과한 Neo4j 후보 순서를 보존하고, `referenceChunkIds`와 `entityChunkIds`는 후보 경로를 구분합니다. `retrievalTrace.graph.chain.hops`는 단계별 `fromDocumentIds` → 권한 통과 `accessibleDocumentIds`를 보여줍니다. 선택적으로 `expectedDocumentIds`에 평가 정답 문서 ID를 넣으면 `retrievalTrace.evaluation.unexpectedCandidates`와 `unexpectedFinal`에 단계별·최종 기대 밖 청크 ID가 표시됩니다. 무관 질문은 빈 배열을 넣어야 모든 결과가 기대 밖으로 분류됩니다. 이 값은 평가 라벨로만 쓰이며 검색 필터나 권한 검사에 사용되지 않습니다. trace의 쿼리와 문서 ID는 권한 있는 요청자에게만 응답되므로, 진단 응답을 외부에 공유하기 전에 내부 식별자를 가리세요.
+
 권한 범위는 질문 요청의 `accessScope`로 받습니다(`departmentId`, `position`, `clearance`, `isAdmin`). 요청에 없으면 운영 환경에서는 어떤 문서도 근거로 돌려주지 않습니다. 로컬 시험에서는 요청에 없을 때 `ACCESS_DEPARTMENT_ID`, `ACCESS_POSITION`, `ACCESS_CLEARANCE`, `ACCESS_IS_ADMIN`으로 권한 범위를 지정합니다. `ACCESS_CLEARANCE`나 `ACCESS_IS_ADMIN=true`가 없으면 권한 범위가 없는 것으로 봅니다.
 
 JSON 문서는 `python -m app.retrieval.indexing <파일>`로 적재합니다. 현재 버전이 아닌 문서는 임베딩 전에 건너뛰고, 저장 직전에 다시 확인합니다. 파일 업로드와 파서는 아직 없습니다. `chunks.document_version_id`가 서버의 `document_versions.id`를 참조하므로 `version_id`는 서버에 있는 문서 버전의 UUID여야 합니다. `data/demo_documents.json`은 문자열 ID를 쓰고 있어 그대로는 팀 서버에 적재할 수 없습니다.

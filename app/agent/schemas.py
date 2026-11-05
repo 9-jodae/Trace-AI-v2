@@ -26,6 +26,10 @@ class ChatRequest(CamelModel):
     thread_id: str | None = Field(default=None, max_length=128)
     filters: SearchFilters | None = None
     access_scope: AccessScopeInput | None = None
+    trace_retrieval: bool = False
+    expected_document_ids: list[Annotated[str, StringConstraints(min_length=1, max_length=128)]] | None = Field(
+        default=None, max_length=50
+    )
 
 
 class SourceChunk(CamelModel):
@@ -67,3 +71,4 @@ class ChatResponse(CamelModel):
     keywords: list[KeywordItem]
     failed_sources: list[str]
     fallback_reason: str | None
+    retrieval_trace: dict | None = None

@@ -53,6 +53,9 @@ class AgentState(TypedDict):
     context_probability: float | None
     failed_sources: list[str]
     fallback_reason: str | None
+    trace_retrieval: bool
+    retrieval_trace: dict | None
+    expected_document_ids: list[str] | None
 
 
 def _history(state: AgentState) -> list[AnyMessage]:
@@ -146,15 +149,30 @@ def _search_query(state: AgentState) -> str:
 
 
 async def retrieve(state: AgentState) -> dict:
-    result = await search(_search_query(state), state.get("filters"), state.get("access_scope"))
+    trace_enabled = state.get("trace_retrieval", False)
+    search_args = (_search_query(state), state.get("filters"), state.get("access_scope"))
+    result = (
+        await search(*search_args, include_trace=True, expected_document_ids=state.get("expected_document_ids"))
+        if trace_enabled else await search(*search_args)
+    )
     update = {"context": result["chunks"], "failed_sources": result["failed_sources"]}
+    if trace_enabled:
+        update["retrieval_trace"] = {"attempts": [result.get("retrieval_trace")]}
     if result["chunks"]:
         return update
     alternate = await _alternate_search(state)
-    if alternate is None or not alternate[1]["chunks"]:
+    if alternate is None:
         return update
     query, found = alternate
-    return {"context": found["chunks"], "failed_sources": found["failed_sources"], "alternate_query": query}
+    retrace = update.get("retrieval_trace")
+    if trace_enabled and retrace is not None:
+        retrace["attempts"].append(found.get("retrieval_trace"))
+    if not found["chunks"]:
+        return update
+    return {
+        "context": found["chunks"], "failed_sources": found["failed_sources"], "alternate_query": query,
+        **({"retrieval_trace": retrace} if trace_enabled else {}),
+    }
 
 
 async def _reply_without_documents(state: AgentState) -> dict:
@@ -182,7 +200,14 @@ async def _alternate_search(state: AgentState) -> tuple[str, SearchResult] | Non
         query = await rewrite_search_query(_search_query(state))
         if query is None:
             return None
-        return query, await search(query, state.get("filters"), state.get("access_scope"))
+        args = (query, state.get("filters"), state.get("access_scope"))
+        found = (
+            await search(
+                *args, include_trace=True, expected_document_ids=state.get("expected_document_ids")
+            )
+            if state.get("trace_retrieval", False) else await search(*args)
+        )
+        return query, found
     except AiUnavailableError as exc:
         logger.warning("Alternate search failed: %s", exc)
         return None

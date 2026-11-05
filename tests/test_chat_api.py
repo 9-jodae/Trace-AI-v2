@@ -22,6 +22,26 @@ def test_response_fields_are_camel_case(ask):
     assert set(ask("q").json()) == RESPONSE_FIELDS
 
 
+def test_retrieval_trace_is_opt_in_and_returned_from_search(client, ai):
+    ai.search_result = {
+        "chunks": [chunk("trace-chunk")],
+        "failed_sources": [],
+        "retrieval_trace": {
+            "query": "q", "stages": {"graph": [{"chunk_id": "trace-chunk"}]},
+            "evaluation": {"unexpected_final": [{"chunk_id": "trace-chunk"}]},
+        },
+    }
+    response = client.post(
+        URL, json={"message": "q", "traceRetrieval": True, "expectedDocumentIds": ["expected-doc"]}
+    )
+    assert response.status_code == 200
+    trace = response.json()["retrievalTrace"]["attempts"][0]
+    assert trace["stages"]["graph"][0]["chunkId"] == "trace-chunk"
+    assert trace["evaluation"]["unexpectedFinal"][0]["chunkId"] == "trace-chunk"
+    assert ai.trace_calls == [("q", ["expected-doc"])]
+    assert "retrievalTrace" not in client.post(URL, json={"message": "q"}).json()
+
+
 def test_source_fields(ask):
     assert set(ask("q").json()["sources"][0]) == {
         "id",

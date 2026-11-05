@@ -152,6 +152,49 @@ def test_results_are_fused(stores):
     assert result["failed_sources"] == []
 
 
+def test_opt_in_trace_explains_stage_ranks_without_chunk_text(stores):
+    stores(
+        FakeStore(
+            [chunk("vector-1", "private text", source="vector-doc") | {"document_id": "expected-doc"}],
+            fulltext=[chunk("shared", "private text") | {"document_id": "unexpected-doc"}],
+        ),
+        FakeStore([chunk("graph-1", "private graph text", source="graph-doc") | {"document_id": "graph-doc"}]),
+    )
+    result = asyncio.run(service.search("trace question", include_trace=True, expected_document_ids=["expected-doc"]))
+
+    trace = result["retrieval_trace"]
+    assert trace["query"] == "trace question"
+    assert trace["stages"]["vector"][0]["chunk_id"] == "vector-1"
+    assert trace["stages"]["fulltext"][0]["chunk_id"] == "shared"
+    assert trace["graph"]["reference_chunk_ids"] == ["graph-1"]
+    assert [item["chunk_id"] for item in trace["rrf"]] == [item["chunk_id"] for item in trace["final"]]
+    graph_rank = next(item for item in trace["rrf"] if item["chunk_id"] == "graph-1")
+    assert graph_rank["source_ranks"] == {"graph": 1}
+    assert trace["final"][0]["origin"] == "rrf"
+    assert trace["evaluation"]["unexpected_final"]
+    assert any(item["stage"] == "graph" and item["chunk_id"] == "graph-1"
+               for item in trace["evaluation"]["unexpected_candidates"])
+    assert "text" not in trace["stages"]["vector"][0]
+    assert "private text" not in str(trace)
+
+
+def test_trace_records_disabled_graph_without_exposing_candidates(stores):
+    stores(FakeStore([chunk("a")]), service.NoGraphStore())
+    result = asyncio.run(service.search("query", include_trace=True))
+    assert result["retrieval_trace"]["graph"]["status"] == "disabled"
+    assert result["retrieval_trace"]["graph"]["hydrated_chunk_ids"] == []
+
+
+def test_trace_explains_scope_skip_without_searching(monkeypatch):
+    vector = FakeStore([chunk("secret")])
+    monkeypatch.setattr(service, "get_stores", lambda: (vector, FakeStore()))
+    monkeypatch.setattr(service.config, "access_scope", lambda: None)
+    monkeypatch.setattr(service.config, "use_sample_data", lambda: False)
+    result = asyncio.run(service.search("query", include_trace=True))
+    assert result["retrieval_trace"]["skip_reason"] == "no_access_scope"
+    assert vector.calls == []
+
+
 def test_context_limit(stores):
     stores(FakeStore([chunk(str(i)) for i in range(10)]), FakeStore())
     assert len(asyncio.run(service.search("질문"))["chunks"]) == service.CONTEXT_LIMIT
@@ -543,6 +586,25 @@ class TestChainSearch:
         result = self.ids()
         assert "secret-chunk" not in result and "after-chunk" not in result
         assert len(graph.followed) == 1
+
+    def test_trace_shows_only_accessible_documents_and_chain_chunks(self, chain):
+        vector, graph = chain
+        graph.links = {"d0": ["secret", "x1"], "x1": ["x2"]}
+
+        async def allowed(document_ids, scope, filters=None):
+            return {document_id for document_id in document_ids if document_id != "secret"}
+
+        vector.accessible_document_ids = allowed
+        result = asyncio.run(service.search("질문", None, SCOPE, include_trace=True))
+
+        trace = result["retrieval_trace"]["graph"]["chain"]
+        assert trace["hops"] == [
+            {"hop": 1, "from_document_ids": ["d0", "d1", "d2"], "accessible_document_ids": ["x1"]},
+            {"hop": 2, "from_document_ids": ["x1"], "accessible_document_ids": ["x2"]},
+        ]
+        assert "secret" not in str(trace)
+        assert trace["hydrated_chunk_ids"] == ["x2-chunk", "x1-chunk"]
+        assert all(item["origin"] == "chain" for item in result["retrieval_trace"]["final"][5:])
 
     def test_seeds_are_limited(self, chain):
         _, graph = chain

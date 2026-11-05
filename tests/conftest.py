@@ -62,6 +62,7 @@ class FakeAi:
         self.llm_error = None
         self.jev_calls = []
         self.search_calls = []
+        self.trace_calls = []
         self.llm_calls = []
         self.small_talk = 0.0
         self.small_talk_calls = []
@@ -101,12 +102,21 @@ class FakeAi:
         self.filter_scope = scope
         return chunks
 
-    async def search(self, query, filters=None, scope=None):
+    async def search(self, query, filters=None, scope=None, include_trace=False, expected_document_ids=None):
         self.search_calls.append(query)
         self.search_filters = filters
         self.search_scope = scope
         if isinstance(self.search_result, Exception):
             raise self.search_result
+        if include_trace and isinstance(self.search_result, dict):
+            self.trace_calls.append((query, expected_document_ids))
+            return {
+                **self.search_result,
+                "retrieval_trace": self.search_result.get(
+                    "retrieval_trace", {"query": query, "stages": {}, "rrf": [], "final": [],
+                                        "evaluation": {"expected_document_ids": expected_document_ids}}
+                ),
+            }
         return self.search_result
 
     async def generate(self, question, context, history):

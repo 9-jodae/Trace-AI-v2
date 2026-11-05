@@ -4,7 +4,9 @@ import time
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 from langchain_core.messages import HumanMessage
+from pydantic.alias_generators import to_camel
 
 from app.agent.schemas import ChatRequest, ChatResponse
 from app.core import config
@@ -16,8 +18,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"], dependencies=[Depends(require_internal_secret)])
 
 
-@router.post("/chat")
-async def chat(body: ChatRequest, request: Request) -> ChatResponse:
+def _camelize_trace(value):
+    if isinstance(value, dict):
+        return {to_camel(key): _camelize_trace(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_camelize_trace(item) for item in value]
+    return value
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat(body: ChatRequest, request: Request) -> JSONResponse:
     thread_id = body.thread_id or str(uuid4())
     conversations = request.app.state.conversations
     started = time.perf_counter()
@@ -33,6 +43,8 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
                         "context": saved["context"],
                         "filters": body.filters,
                         "access_scope": body.access_scope.to_scope() if body.access_scope else None,
+                        "trace_retrieval": body.trace_retrieval,
+                        "expected_document_ids": body.expected_document_ids,
                     },
                 )
                 # 실패한 요청은 여기까지 오지 않으므로 대화 기록과 컨텍스트에 남지 않는다
@@ -40,7 +52,14 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     except TimeoutError as exc:
         raise AiUnavailableError("요청 전체 시간 상한을 넘었습니다.") from exc
     logger.info("Chat finished: route=%s total_ms=%.0f", result["route"], (time.perf_counter() - started) * 1000)
-    return ChatResponse(
+    retrieval_trace = result.get("retrieval_trace")
+    if body.trace_retrieval and retrieval_trace is None:
+        retrieval_trace = {
+            "status": "retrieval_skipped",
+            "route": result["route"],
+            "query": body.message,
+        }
+    response = ChatResponse(
         thread_id=thread_id,
         answer=result["messages"][-1].text,
         answer_type=result["answer_type"],
@@ -51,4 +70,12 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
         keywords=result["keywords"],
         failed_sources=result["failed_sources"],
         fallback_reason=result["fallback_reason"],
+        **({"retrieval_trace": _camelize_trace(retrieval_trace)} if retrieval_trace else {}),
+    )
+    return JSONResponse(
+        content=response.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude={"retrieval_trace"} if not retrieval_trace else set(),
+        )
     )

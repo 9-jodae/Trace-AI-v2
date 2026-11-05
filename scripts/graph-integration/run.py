@@ -153,7 +153,7 @@ def main() -> int:
 
         from app.agent import graph as agent_graph
         from app.retrieval import indexing, service
-        from app.retrieval.fusion import rrf_fuse as original_rrf_fuse
+        from app.retrieval.fusion import rrf_fuse_with_trace as original_rrf_fuse_with_trace
         from app.retrieval.neo4j_store import Neo4jGraphStore
         from app.retrieval.stores import PostgresVectorStore
 
@@ -303,23 +303,26 @@ def main() -> int:
             return result
 
         def traced_rrf(rankings, limit):
-            result = original_rrf_fuse(rankings, limit)
+            result, fusion_trace = original_rrf_fuse_with_trace(rankings, limit)
             if capture["enabled"]:
                 trace["rrf_input_rankings"] = [[item["id"] for item in ranking] for ranking in rankings]
                 trace["rrf_output_chunk_ids"] = [item["id"] for item in result]
-            return result
+            return result, fusion_trace
 
         Neo4jGraphStore.search_from_documents = traced_graph
         PostgresVectorStore.accessible_document_ids = traced_accessible_docs
         PostgresVectorStore.fetch_accessible = traced_fetch
         PostgresVectorStore.search = traced_vector
         PostgresVectorStore.fulltext = traced_fulltext
-        service.rrf_fuse = traced_rrf
+        service.rrf_fuse_with_trace = traced_rrf
 
         import main as app_module
 
         capture["enabled"] = True
-        payload = {"message": QUESTION, "accessScope": SCOPE}
+        payload = {
+            "message": QUESTION, "accessScope": SCOPE, "traceRetrieval": True,
+            "expectedDocumentIds": [related_document_id],
+        }
         with TestClient(app_module.app) as client:
             no_embedding_response = client.post("/api/v1/agent/chat", json=payload)
             no_embedding_trace = json.loads(json.dumps(trace))
@@ -347,7 +350,11 @@ def main() -> int:
                 trace.update(new_trace())
                 response = client.post(
                     "/api/v1/agent/chat",
-                    json={"message": question, "accessScope": access_scope, "threadId": f"isolated-{case_name}"},
+                    json={
+                        "message": question, "accessScope": access_scope,
+                        "threadId": f"isolated-{case_name}", "traceRetrieval": True,
+                        "expectedDocumentIds": [expected_document_id] if expected_document_id else [],
+                    },
                 )
                 case_trace = json.loads(json.dumps(trace))
                 body = response.json()
@@ -379,6 +386,7 @@ def main() -> int:
                         "question": question,
                         "access_scope": access_scope,
                         "trace": case_trace,
+                        "application_retrieval_trace": body.get("retrievalTrace"),
                         "final_source_chunk_ids": [item["id"] for item in body.get("sources", [])],
                         "sources": [
                             {key: item.get(key) for key in ("id", "source", "documentId", "versionId")}
@@ -392,6 +400,7 @@ def main() -> int:
                 )
 
         def case_passed(response, body, case_trace, require_vector: bool) -> bool:
+            app_trace = body.get("retrievalTrace", {}).get("attempts", [{}])[0]
             related_source_ids = [
                 source["id"]
                 for source in body.get("sources", [])
@@ -409,6 +418,14 @@ def main() -> int:
                 and any(
                     item.get("documentId") == related_document_id and item.get("quote") == EXPECTED_QUOTE
                     for item in body.get("evidence", [])
+                )
+                and any(
+                    candidate.get("documentId") == related_document_id
+                    for candidate in app_trace.get("stages", {}).get("graph", [])
+                )
+                and any(
+                    candidate.get("documentId") == related_document_id
+                    for candidate in app_trace.get("final", [])
                 )
                 and case_trace["rrf_output_chunk_ids"] == [item["id"] for item in body.get("sources", [])]
                 and (not require_vector or bool(case_trace["postgres_vector_chunk_ids"]))
@@ -435,6 +452,7 @@ def main() -> int:
                     "result": "PASS" if no_embedding_passed else "FAIL",
                     "query_embedding": "test stub raises; graph path continues without vector distance filtering",
                     "trace": no_embedding_trace,
+                    "application_retrieval_trace": no_embedding_body.get("retrievalTrace"),
                     "final_source_chunk_ids": [item["id"] for item in no_embedding_body.get("sources", [])],
                     "sources": [
                         {key: item.get(key) for key in ("id", "source", "documentId", "versionId")}
@@ -450,6 +468,7 @@ def main() -> int:
                     "result": "PASS" if hybrid_passed else "FAIL",
                     "query_embedding": "deterministic test stub; no external embedding service",
                     "trace": hybrid_trace,
+                    "application_retrieval_trace": hybrid_body.get("retrievalTrace"),
                     "final_source_chunk_ids": [item["id"] for item in hybrid_body.get("sources", [])],
                     "sources": [
                         {key: item.get(key) for key in ("id", "source", "documentId", "versionId")}
