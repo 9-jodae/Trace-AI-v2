@@ -191,7 +191,10 @@ class TestPostgresVectorStore:
         assert result == [chunk("a")]
         sql, params = data_statements(connection)[0]
         assert "<=>" in sql and "LIMIT" in sql and sql.lstrip().startswith("SELECT")
-        assert params == ("dept", "STAFF", "INTERNAL", False, None, None, None, None, None, "[0.5,1.0]", 3)
+        assert params == (
+            "dept", "STAFF", "INTERNAL", False, None, None, None, None, None,
+            "[0.5,1.0]", stores.config.DEFAULT_VECTOR_MAX_COSINE_DISTANCE, "[0.5,1.0]", 3,
+        )
         assert connection.executed[0] == (stores.SET_STATEMENT_TIMEOUT_SQL, (str(stores.SEARCH_STATEMENT_TIMEOUT_MS),))
 
     def test_search_passes_filters_in_function_order(self, connect):
@@ -206,7 +209,8 @@ class TestPostgresVectorStore:
         )
         asyncio.run(stores.PostgresVectorStore("x").search([1.0], 2, SCOPE, filters))
         assert data_statements(connection)[0][1] == (
-            *SCOPE, ["pdf"], ["REPORT"], ["LOCAL"], date(2026, 1, 1), date(2026, 12, 31), "[1.0]", 2,
+            *SCOPE, ["pdf"], ["REPORT"], ["LOCAL"], date(2026, 1, 1), date(2026, 12, 31),
+            "[1.0]", stores.config.DEFAULT_VECTOR_MAX_COSINE_DISTANCE, "[1.0]", 2,
         )
 
     def test_filter_accessible_with_filters_uses_filtered_function(self, connect):
@@ -228,6 +232,9 @@ class TestPostgresVectorStore:
 
     def test_search_skips_chunks_without_embedding(self):
         assert "c.embedding IS NOT NULL" in stores.VECTOR_SEARCH_SQL
+
+    def test_search_applies_parameterized_cosine_distance_cutoff(self):
+        assert "c.embedding <=> %s::vector <= %s" in stores.VECTOR_SEARCH_SQL
 
     def test_search_returns_fields_of_response_contract(self):
         for alias in ["AS id", "AS text", "AS source", "AS document_id", "AS version_id", "char_start", "char_end"]:

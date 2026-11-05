@@ -20,6 +20,7 @@ FROM accessible_chunks(%s::uuid, %s::text, %s::text, %s::boolean, %s::text[], %s
 JOIN document_versions dv ON dv.id = c.document_version_id
 JOIN documents d ON d.id = dv.document_id
 WHERE c.embedding IS NOT NULL
+  AND c.embedding <=> %s::vector <= %s
 ORDER BY c.embedding <=> %s::vector
 LIMIT %s
 """
@@ -143,7 +144,11 @@ class PostgresVectorStore:
     ) -> list[Chunk]:
         if scope is None:
             return []
-        return await self._read(VECTOR_SEARCH_SQL, (*scope, *_filter_params(filters), _to_vector(embedding), limit))
+        vector = _to_vector(embedding)
+        return await self._read(
+            VECTOR_SEARCH_SQL,
+            (*scope, *_filter_params(filters), vector, config.vector_max_cosine_distance(), vector, limit),
+        )
 
     async def filter_accessible(
         self, chunk_ids: list[str], scope: AccessScope | None, filters: SearchFilters | None = None

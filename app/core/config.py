@@ -13,6 +13,7 @@ DEFAULT_MAX_CONVERSATIONS = 1000
 DEFAULT_CONVERSATION_TTL_SECONDS = 3600
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
 DEFAULT_DB_POOL_MAX_SIZE = 10
+DEFAULT_VECTOR_MAX_COSINE_DISTANCE = 0.55
 
 
 def is_production() -> bool:
@@ -143,6 +144,15 @@ def request_timeout_seconds() -> int:
 
 def db_pool_max_size() -> int:
     return _positive_int("DB_POOL_MAX_SIZE", DEFAULT_DB_POOL_MAX_SIZE)
+
+
+def vector_max_cosine_distance() -> float:
+    """pgvector cosine distance cutoff; range is [0, 2]."""
+    raw = os.getenv("VECTOR_MAX_COSINE_DISTANCE")
+    value = DEFAULT_VECTOR_MAX_COSINE_DISTANCE if not raw else float(raw)
+    if not 0.0 <= value <= 2.0:
+        raise ValueError("VECTOR_MAX_COSINE_DISTANCE는 0과 2 사이여야 합니다.")
+    return value
 
 
 def database_url() -> str | None:

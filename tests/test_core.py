@@ -42,6 +42,20 @@ class TestConfig:
         with pytest.raises(ValueError):
             config.embedding_dimensions()
 
+    def test_vector_distance_cutoff_default(self, monkeypatch):
+        monkeypatch.delenv("VECTOR_MAX_COSINE_DISTANCE", raising=False)
+        assert config.vector_max_cosine_distance() == 0.55
+
+    def test_vector_distance_cutoff_can_be_configured(self, monkeypatch):
+        monkeypatch.setenv("VECTOR_MAX_COSINE_DISTANCE", "0.42")
+        assert config.vector_max_cosine_distance() == 0.42
+
+    @pytest.mark.parametrize("value", ["-0.1", "2.1", "invalid"])
+    def test_vector_distance_cutoff_rejects_invalid_values(self, monkeypatch, value):
+        monkeypatch.setenv("VECTOR_MAX_COSINE_DISTANCE", value)
+        with pytest.raises(ValueError):
+            config.vector_max_cosine_distance()
+
 
 class TestServerOptions:
     @pytest.fixture(autouse=True)
