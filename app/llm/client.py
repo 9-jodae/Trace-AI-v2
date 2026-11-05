@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 30.0
 MAX_RETRIES = 1
+# Bedrock 기본값 1024로는 긴 답변의 JSON이 잘린다. TIMEOUT_SECONDS 안에 끝나는 크기로 둔다
+MAX_OUTPUT_TOKENS = 2048
 
 
 class EmptyResponseError(Exception):
@@ -50,7 +52,7 @@ def build_prompt(question: str, context: list[Chunk]) -> str:
 def _build_model(model_name: str, api_key: str | None):
     # Bedrock은 API 키 대신 실행 환경의 AWS 자격 증명을 쓴다
     credentials = config.bedrock_options() if config.uses_aws_credentials(model_name) else {"api_key": api_key}
-    return init_chat_model(model_name, max_retries=MAX_RETRIES, **credentials)
+    return init_chat_model(model_name, max_retries=MAX_RETRIES, max_tokens=MAX_OUTPUT_TOKENS, **credentials)
 
 
 async def _invoke(model_name: str, messages: list[BaseMessage]) -> str:

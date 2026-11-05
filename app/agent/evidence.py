@@ -36,7 +36,8 @@ class Evidence(TypedDict):
 
 def _locate(chunk: Chunk, quote: str) -> Evidence | None:
     # 위치는 모델의 숫자를 믿지 않고 원문에서 직접 계산한다. 원문에 없는 문구는 근거로 내보내지 않는다
-    position = chunk["text"].find(quote) if quote.strip() else -1
+    quote = quote.strip()
+    position = chunk["text"].find(quote) if quote else -1
     if position < 0:
         return None
     base = chunk.get("char_start")
@@ -59,9 +60,9 @@ def ground_evidence(candidates: list[EvidenceCandidate], context: list[Chunk]) -
         if not 1 <= candidate.chunk <= len(context):
             continue
         evidence = _locate(context[candidate.chunk - 1], candidate.quote)
-        if evidence is None or (evidence["chunk_id"], candidate.quote) in seen:
+        if evidence is None or (evidence["chunk_id"], evidence["quote"]) in seen:
             continue
-        seen.add((evidence["chunk_id"], candidate.quote))
+        seen.add((evidence["chunk_id"], evidence["quote"]))
         grounded.append(evidence)
     return grounded[:MAX_EVIDENCE]
 
@@ -89,5 +90,7 @@ def parse_answer(response: str, context: list[Chunk]) -> tuple[str, list[Evidenc
         candidate = AnswerCandidate.model_validate_json(body)
     except ValidationError as exc:
         # 잘린 JSON이나 빈 답변을 사용자에게 그대로 보여 주지 않는다
+        # 응답 본문 대신 원인을 가를 수 있는 값만 남긴다
+        logger.warning("LLM answer parse failed: %s length=%d", exc.errors()[0]["type"], len(body))
         raise AiUnavailableError("LLM 응답 형식이 올바르지 않습니다.") from exc
     return candidate.answer, ground_evidence(_valid_candidates(candidate.evidence), context)

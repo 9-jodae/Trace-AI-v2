@@ -35,6 +35,9 @@ def model(monkeypatch):
     return fake
 
 
+OPTIONS = {"max_retries": llm.MAX_RETRIES, "max_tokens": llm.MAX_OUTPUT_TOKENS}
+
+
 def run(question="질문", context=None, history=None):
     return asyncio.run(llm.generate_answer(question, context or [chunk("a", "청크 내용")], history or []))
 
@@ -93,7 +96,7 @@ class TestGenerateAnswer:
 
     def test_uses_configured_model_and_key(self, model):
         run()
-        assert model.init_calls == [("fake:fake-llm", {"max_retries": llm.MAX_RETRIES, "api_key": "fake-llm-key"})]
+        assert model.init_calls == [("fake:fake-llm", {**OPTIONS, "api_key": "fake-llm-key"})]
 
     def test_message_order(self, model):
         history = [HumanMessage(content="이전"), AIMessage(content="이전 답")]
@@ -124,7 +127,7 @@ class TestGenerateAnswer:
         assert model.init_calls == [
             (
                 "bedrock:jp.anthropic.claude-haiku-4-5-20251001-v1:0",
-                {"max_retries": llm.MAX_RETRIES, "region_name": "ap-northeast-1"},
+                {**OPTIONS, "region_name": "ap-northeast-1"},
             )
         ]
         llm._build_model.cache_clear()
@@ -169,7 +172,7 @@ class TestGenerateAnswer:
         monkeypatch.setenv("LLM_MODEL", "bedrock_converse:some-model")
         monkeypatch.setenv("LLM_API_KEY", "")
         assert run() == "답변"
-        assert model.init_calls == [("bedrock_converse:some-model", {"max_retries": llm.MAX_RETRIES})]
+        assert model.init_calls == [("bedrock_converse:some-model", OPTIONS)]
 
 
 class TestFallbackModel:

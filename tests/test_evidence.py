@@ -31,6 +31,15 @@ class TestGroundEvidence:
         [evidence] = ground_evidence([candidate(1)], [{**CONTEXT[1], "text": text}])
         assert evidence["char_start"] == 101
 
+    def test_surrounding_whitespace_is_trimmed_from_quote_and_position(self):
+        [evidence] = ground_evidence([candidate(2, f" {QUOTE}\n")], CONTEXT)
+        start = TEXT.index(QUOTE)
+        assert evidence["quote"] == QUOTE
+        assert evidence["char_start"] == 100 + start and evidence["char_end"] == 100 + start + len(QUOTE)
+
+    def test_whitespace_variants_are_deduplicated(self):
+        assert len(ground_evidence([candidate(2), candidate(2, f" {QUOTE}")], CONTEXT)) == 1
+
     def test_quote_not_in_chunk_is_dropped(self):
         assert ground_evidence([candidate(2, "연차는 최대 20일입니다.")], CONTEXT) == []
 
@@ -108,6 +117,11 @@ class TestParseAnswer:
     def test_malformed_item_keeps_other_quotes(self):
         response = '{"answer": "답", "evidence": [{"chunk": "2", "quote": "x"}, {"chunk": 2, "quote": "%s"}]}' % QUOTE
         assert [item["quote"] for item in parse_answer(response, CONTEXT)[1]] == [QUOTE]
+
+    def test_parse_failure_log_has_no_content(self, caplog):
+        with pytest.raises(AiUnavailableError):
+            parse_answer('{"answer": "비밀 본문', CONTEXT)
+        assert "json_invalid" in caplog.text and "비밀" not in caplog.text
 
     def test_answer_whitespace_is_trimmed(self):
         assert parse_answer('{"answer": "  답  "}', CONTEXT)[0] == "답"
