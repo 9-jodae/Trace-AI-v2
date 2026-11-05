@@ -7,6 +7,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
+from app.agent.evidence import Evidence, parse_answer
 from app.core import config
 from app.core.errors import describe_exception
 from app.jev.client import can_answer_probability
@@ -25,6 +26,7 @@ NO_RESULT_ANSWER = "관련 문서를 찾지 못했습니다."
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     context: list[Chunk]
+    evidence: list[Evidence]
     route: Literal["CONTEXT", "SEARCH"]
     context_probability: float | None
     failed_sources: list[str]
@@ -74,9 +76,11 @@ async def retrieve(state: AgentState) -> dict:
 
 async def generate(state: AgentState) -> dict:
     if not state["context"]:
-        return {"messages": [AIMessage(content=NO_RESULT_ANSWER)]}
-    answer = await generate_answer(state["messages"][-1].text, state["context"], _history(state))
-    return {"messages": [AIMessage(content=answer)]}
+        return {"messages": [AIMessage(content=NO_RESULT_ANSWER)], "evidence": []}
+    response = await generate_answer(state["messages"][-1].text, state["context"], _history(state))
+    answer, evidence = parse_answer(response, state["context"])
+    # 다음 턴의 대화 기록에는 JSON이 아니라 답변만 남긴다
+    return {"messages": [AIMessage(content=answer)], "evidence": evidence}
 
 
 def _timed(name: str, step: Callable[[AgentState], Awaitable[dict]]) -> Callable[[AgentState], Awaitable[dict]]:

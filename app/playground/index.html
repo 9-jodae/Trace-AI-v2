@@ -89,6 +89,8 @@ ol { margin: 0; padding-left: 20px; color: var(--muted); font-size: 14px; }
   <div class="panel">
     <h2>답변</h2>
     <p id="answer">-</p>
+    <h2>핵심 문구</h2>
+    <ol id="evidence"></ol>
     <h2>참조한 청크</h2>
     <ol id="sources"></ol>
   </div>
@@ -154,6 +156,11 @@ function render(d) {
   paint(nodes, edges);
   $("reason").textContent = reasonText(d);
   $("answer").textContent = d.answer;
+  $("evidence").replaceChildren(...d.evidence.map((item) => {
+    const row = document.createElement("li");
+    row.textContent = `[${item.source}] ${item.quote}`;
+    return row;
+  }));
   $("sources").replaceChildren(...d.sources.map((chunk) => {
     const item = document.createElement("li");
     item.textContent = `[${chunk.source}] ${chunk.text}`;
@@ -200,6 +207,7 @@ $("reset").onclick = () => {
   $("s-jev").textContent = "대기";
   $("reason").textContent = "아직 질문하지 않았습니다.";
   $("answer").textContent = "-";
+  $("evidence").replaceChildren();
   $("sources").replaceChildren();
   showNotice("");
 };

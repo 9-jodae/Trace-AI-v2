@@ -41,6 +41,7 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
         route=result["route"],
         context_probability=result["context_probability"],
         sources=result["context"],
+        evidence=result["evidence"],
         failed_sources=result["failed_sources"],
         fallback_reason=result["fallback_reason"],
     )

@@ -44,6 +44,10 @@ class TestBuildPrompt:
         prompt = llm.build_prompt("질문입니다", [chunk("a", "청크 내용", "규정")])
         assert "청크 내용" in prompt and "[규정]" in prompt and "질문입니다" in prompt
 
+    def test_numbers_chunks_from_one(self):
+        prompt = llm.build_prompt("q", [chunk("a", "첫째", "규정"), chunk("b", "둘째", "규정")])
+        assert "1. [규정] 첫째" in prompt and "2. [규정] 둘째" in prompt
+
     def test_keeps_rank_order(self):
         prompt = llm.build_prompt("q", [chunk("a", "첫째"), chunk("b", "둘째")])
         assert prompt.index("첫째") < prompt.index("둘째")
@@ -97,6 +101,11 @@ class TestGenerateAnswer:
         assert isinstance(model.messages[0], SystemMessage)
         assert model.messages[1:3] == history
         assert "청크 내용" in model.messages[-1].content
+
+    def test_system_prompt_requires_verbatim_quotes(self, model):
+        run()
+        system = model.messages[0].content
+        assert '"evidence"' in system and "그대로 복사" in system
 
     def test_system_prompt_guards(self, model):
         run()

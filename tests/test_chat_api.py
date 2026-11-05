@@ -1,5 +1,7 @@
 import pytest
+from conftest import chunk
 
+from app.agent import graph
 from app.agent.schemas import MAX_MESSAGE_LENGTH
 
 URL = "/api/v1/agent/chat"
@@ -9,6 +11,7 @@ RESPONSE_FIELDS = {
     "route",
     "contextProbability",
     "sources",
+    "evidence",
     "failedSources",
     "fallbackReason",
 }
@@ -121,3 +124,40 @@ def test_contract_fields_reach_response(ask, ai):
 
 def test_oversized_thread_id_is_rejected(client, ai):
     assert client.post(URL, json={"message": "q", "threadId": "x" * 129}).status_code == 422
+
+
+class TestEvidence:
+    @pytest.fixture
+    def grounded(self, ai, monkeypatch):
+        ai.search_result = {"chunks": [chunk("a", "연차는 15일입니다.")], "failed_sources": []}
+
+        async def generate(question, context, history):
+            ai.llm_calls.append({"history": [message.text for message in history]})
+            quotes = '[{"chunk": 1, "quote": "15일"}, {"chunk": 1, "quote": "20일"}]'
+            return f'{{"answer": "15일입니다.", "evidence": {quotes}}}'
+
+        monkeypatch.setattr(graph, "generate_answer", generate)
+        return ai
+
+    def test_fields_and_only_grounded_quotes_are_returned(self, ask, grounded):
+        body = ask("q").json()
+        assert body["answer"] == "15일입니다."
+        assert [item["quote"] for item in body["evidence"]] == ["15일"]
+        assert set(body["evidence"][0]) == {
+            "chunkId",
+            "source",
+            "documentId",
+            "versionId",
+            "quote",
+            "charStart",
+            "charEnd",
+        }
+
+    def test_history_keeps_answer_not_json(self, ask, grounded):
+        ask("q1")
+        ask("q2")
+        assert grounded.llm_calls[-1]["history"][-1] == "15일입니다."
+
+    def test_no_result_has_no_evidence(self, ask, ai):
+        ai.search_result = {"chunks": [], "failed_sources": []}
+        assert ask("q").json()["evidence"] == []

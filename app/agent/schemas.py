@@ -23,11 +23,23 @@ class SourceChunk(CamelModel):
     char_end: int | None = None
 
 
+class EvidenceQuote(CamelModel):
+    # TODO: 응답 필드 이름은 서버 계약에서 확정 (docs199-Server#14)
+    chunk_id: str
+    source: str | None = None
+    document_id: str | None = None
+    version_id: str | None = None
+    quote: str
+    char_start: int | None = None
+    char_end: int | None = None
+
+
 class ChatResponse(CamelModel):
     thread_id: str
     answer: str
     route: Literal["CONTEXT", "SEARCH"]
     context_probability: float | None
     sources: list[SourceChunk]
+    evidence: list[EvidenceQuote]
     failed_sources: list[str]
     fallback_reason: str | None
