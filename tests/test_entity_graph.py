@@ -15,10 +15,11 @@ def make_chunk():
 
 
 def test_entity_identity_is_stable_and_scoped_by_document_namespace_and_type():
-    assert entity_id("ORG_UNIT", "company-a", "doc-1", "재무팀") == entity_id("ORG_UNIT", "company-a", "doc-1", " 재무팀 ")
-    assert entity_id("ORG_UNIT", "company-a", "doc-1", "재무팀") != entity_id("ORG_UNIT", "company-a", "doc-2", "재무팀")
-    assert entity_id("ORG_UNIT", "company-a", "doc-1", "재무팀") != entity_id("ORG_UNIT", "company-b", "doc-1", "재무팀")
-    assert entity_id("ORG_UNIT", "company-a", "doc-1", "재무팀") != entity_id("PROCESS", "company-a", "doc-1", "재무팀")
+    original = entity_id("ORG_UNIT", "company-a", "doc-1", "재무팀")
+    assert original == entity_id("ORG_UNIT", "company-a", "doc-1", " 재무팀 ")
+    assert original != entity_id("ORG_UNIT", "company-a", "doc-2", "재무팀")
+    assert original != entity_id("ORG_UNIT", "company-b", "doc-1", "재무팀")
+    assert original != entity_id("PROCESS", "company-a", "doc-1", "재무팀")
 
 
 def test_mention_requires_exact_name_and_quote_within_chunk_offsets():
